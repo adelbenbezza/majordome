@@ -6,10 +6,11 @@ To change the schema in a later stage, append a new migration; never edit an old
 one, because existing databases have already run it.
 """
 
+import calendar
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -130,6 +131,15 @@ MIGRATIONS: list[str] = [
     );
     INSERT INTO undo_state (id, step, active) VALUES (1, 0, 0);
     """,
+    # 8: more repeat patterns for routines. unit "week": on `weekdays`, every `every` weeks;
+    # unit "month": on day `month_day` (31 = last day), every `every` months. Repeats are
+    # counted from start_date (NULL for older routines: every week, as before).
+    """
+    ALTER TABLE routines ADD COLUMN unit TEXT NOT NULL DEFAULT 'week';
+    ALTER TABLE routines ADD COLUMN every INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE routines ADD COLUMN month_day INTEGER;
+    ALTER TABLE routines ADD COLUMN start_date TEXT;
+    """,
 ]
 
 # Tables whose changes can be undone. Not notifications or usage: those are the bot's
@@ -179,27 +189,64 @@ class Task:
 class Routine:
     id: int
     title: str
-    weekdays: tuple[int, ...]  # Monday = 0 ... Sunday = 6
+    weekdays: tuple[int, ...]  # Monday = 0 ... Sunday = 6 (unit "week")
     time: time | None  # local wall-clock time
     active: bool
     created_at: datetime | None = None  # UTC
+    unit: str = "week"  # "week" or "month"
+    every: int = 1  # every N weeks / months
+    month_day: int | None = None  # unit "month": day of the month, 31 = last day
+    start_date: date | None = None  # repeats are counted from here
 
     @property
     def daily(self) -> bool:
-        return len(self.weekdays) == 7
+        return self.unit == "week" and self.every == 1 and len(self.weekdays) == 7
 
     def happens_on(self, day: date) -> bool:
-        return day.weekday() in self.weekdays
+        if self.start_date and day < self.start_date:
+            return False
+        if self.unit == "month":
+            if self.month_day is None:
+                return False
+            last_day = calendar.monthrange(day.year, day.month)[1]
+            if day.day != min(self.month_day, last_day):  # the 31st falls on the 30th in September
+                return False
+            if self.every > 1 and self.start_date:
+                # Count from the first occurrence: next month if this month's day has passed.
+                start = self.start_date
+                start_month = start.year * 12 + start.month - 1
+                if start.day > min(self.month_day, calendar.monthrange(start.year, start.month)[1]):
+                    start_month += 1
+                return (day.year * 12 + day.month - 1 - start_month) % self.every == 0
+            return True
+        if day.weekday() not in self.weekdays:
+            return False
+        if self.every > 1 and self.start_date:
+            # Count whole weeks from the first occurrence (the first matching day on or
+            # after the start), so "every other Friday" said on a Sunday starts this Friday.
+            first = next(
+                self.start_date + timedelta(days=i)
+                for i in range(7)
+                if (self.start_date + timedelta(days=i)).weekday() in self.weekdays
+            )
+            monday = day - timedelta(days=day.weekday())
+            first_monday = first - timedelta(days=first.weekday())
+            return ((monday - first_monday).days // 7) % self.every == 0
+        return True
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Routine":
         return cls(
             id=row["id"],
             title=row["title"],
-            weekdays=tuple(int(d) for d in row["weekdays"].split(",")),
+            weekdays=tuple(int(d) for d in row["weekdays"].split(",") if d),
             time=time.fromisoformat(row["time"]) if row["time"] else None,
             active=bool(row["active"]),
             created_at=datetime.fromisoformat(row["created_at"]),
+            unit=row["unit"],
+            every=row["every"],
+            month_day=row["month_day"],
+            start_date=date.fromisoformat(row["start_date"]) if row["start_date"] else None,
         )
 
 
@@ -219,6 +266,19 @@ class ListItem:
     id: int
     list_name: str
     text: str
+
+
+def _routine_values(title, weekdays, at, unit, every, month_day, start_date) -> tuple:
+    """A routine's columns as stored: weekdays as "0,1", times and dates as text."""
+    return (
+        title,
+        ",".join(str(d) for d in sorted(set(weekdays))),
+        at.strftime("%H:%M") if at else None,
+        unit,
+        max(1, every),
+        month_day,
+        start_date.isoformat() if start_date else None,
+    )
 
 
 class _Step:
@@ -543,12 +603,21 @@ class Database:
 
     # --- routines ---------------------------------------------------------
 
-    def add_routine(self, title: str, weekdays: list[int], at: time | None = None) -> Routine:
-        days = ",".join(str(d) for d in sorted(set(weekdays)))
+    def add_routine(
+        self,
+        title: str,
+        weekdays: list[int],
+        at: time | None = None,
+        unit: str = "week",
+        every: int = 1,
+        month_day: int | None = None,
+        start_date: date | None = None,
+    ) -> Routine:
         with self.conn:
             cursor = self.conn.execute(
-                "INSERT INTO routines (title, weekdays, time, created_at) VALUES (?, ?, ?, ?)",
-                (title, days, at.strftime("%H:%M") if at else None, utc_now().isoformat()),
+                "INSERT INTO routines (title, weekdays, time, unit, every, month_day, start_date, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (*_routine_values(title, weekdays, at, unit, every, month_day, start_date), utc_now().isoformat()),
             )
         return self.get_routine(cursor.lastrowid)
 
@@ -562,13 +631,23 @@ class Database:
         ).fetchall()
         return [Routine.from_row(row) for row in rows]
 
-    def update_routine(self, routine_id: int, title: str, weekdays: list[int], at: time | None) -> Routine | None:
+    def update_routine(
+        self,
+        routine_id: int,
+        title: str,
+        weekdays: list[int],
+        at: time | None,
+        unit: str = "week",
+        every: int = 1,
+        month_day: int | None = None,
+        start_date: date | None = None,
+    ) -> Routine | None:
         """Change an active routine in place, so its history (and future streak) is kept."""
-        days = ",".join(str(d) for d in sorted(set(weekdays)))
         with self.conn:
             cursor = self.conn.execute(
-                "UPDATE routines SET title = ?, weekdays = ?, time = ? WHERE id = ? AND active = 1",
-                (title, days, at.strftime("%H:%M") if at else None, routine_id),
+                "UPDATE routines SET title = ?, weekdays = ?, time = ?, unit = ?, every = ?, month_day = ?, "
+                "start_date = ? WHERE id = ? AND active = 1",
+                (*_routine_values(title, weekdays, at, unit, every, month_day, start_date), routine_id),
             )
         return self.get_routine(routine_id) if cursor.rowcount else None
 

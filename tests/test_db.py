@@ -180,3 +180,37 @@ def test_timezone_quiet_hours_and_usage():
         ("whisper", "whisper-1", 0, 0, 12.5, 1),
     ]
     assert db.usage_since(datetime.now(timezone.utc) + timedelta(days=1)) == []
+
+
+def test_repeat_patterns():
+    from datetime import date, timedelta
+
+    db = Database(":memory:")
+    start = date(2026, 10, 2)  # a Friday
+    cleaning = db.add_routine("Cleaning", [4], None, unit="week", every=2, start_date=start)
+    rent = db.add_routine("Pay rent", [], None, unit="month", month_day=1, start_date=start)
+    month_end = db.add_routine("Budget", [], None, unit="month", month_day=31, start_date=start)
+    dentist = db.add_routine("Dentist", [], None, unit="month", every=6, month_day=15, start_date=start)
+
+    def days_of(routine, first, last):
+        days, day = [], first
+        while day <= last:
+            if routine.happens_on(day):
+                days.append(day.isoformat())
+            day += timedelta(days=1)
+        return days
+
+    assert days_of(cleaning, date(2026, 9, 25), date(2026, 10, 31)) == ["2026-10-02", "2026-10-16", "2026-10-30"]
+    assert days_of(rent, date(2026, 10, 1), date(2027, 1, 1)) == ["2026-11-01", "2026-12-01", "2027-01-01"]  # not before start
+    assert days_of(month_end, date(2026, 10, 1), date(2027, 3, 1)) == [
+        "2026-10-31", "2026-11-30", "2026-12-31", "2027-01-31", "2027-02-28"  # last day of each month
+    ]
+    assert days_of(dentist, date(2026, 10, 1), date(2027, 12, 31)) == ["2026-10-15", "2027-04-15", "2027-10-15"]
+    assert not rent.daily and not cleaning.daily
+    # Said on 2 Oct, "every 6 months on the 1st" starts on 1 Nov, not next April.
+    boiler = db.add_routine("Boiler check", [], None, unit="month", every=6, month_day=1, start_date=start)
+    assert days_of(boiler, date(2026, 10, 1), date(2027, 6, 1)) == ["2026-11-01", "2027-05-01"]
+
+    # Older routines (no start date) keep repeating every week, as before.
+    gym = db.add_routine("Gym", [0, 1])
+    assert gym.unit == "week" and gym.every == 1 and gym.happens_on(date(2020, 1, 6))
