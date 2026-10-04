@@ -11,6 +11,7 @@ from datetime import datetime
 from telegram.ext import Application, ContextTypes
 
 from .actions import format_brief
+from .buttons import today_keyboard
 from .config import Config
 from .db import Database
 
@@ -31,8 +32,8 @@ async def send_brief(context: ContextTypes.DEFAULT_TYPE) -> None:
     if chat_id is None:
         log.info("No owner yet, skipping the morning brief")
         return
-    text = format_brief(db, datetime.now(config.timezone), db.get_language())
-    await context.bot.send_message(chat_id, text)
+    now, lang = datetime.now(config.timezone), db.get_language()
+    await context.bot.send_message(chat_id, format_brief(db, now, lang), reply_markup=today_keyboard(db, now, lang))
 
 
 def schedule_brief(app: Application) -> None:

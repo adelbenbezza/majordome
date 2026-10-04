@@ -50,14 +50,20 @@ def test_send_brief_goes_to_owner_in_their_language():
     db = Database(":memory:")
     db.claim_owner(42)
     db.set_language("fr")
-    sent = []
+    sent, keyboards = [], []
 
-    async def send_message(chat_id, text):
+    async def send_message(chat_id, text, reply_markup=None):
         sent.append((chat_id, text))
+        keyboards.append(reply_markup)
 
     context = SimpleNamespace(bot_data={"config": CONFIG, "db": db}, bot=SimpleNamespace(send_message=send_message))
     asyncio.run(send_brief(context))
     assert sent == [(42, "☀️ Bonjour ! Rien de prévu aujourd'hui. Profite bien 🙂")]
+    assert keyboards == [None]  # nothing to tick off
+
+    db.add_task("Bank")
+    asyncio.run(send_brief(context))
+    assert [row[0].text for row in keyboards[-1].inline_keyboard] == ["✅ Bank"]
 
     # The owner from OWNER_TELEGRAM_ID wins over the one in the database.
     context.bot_data["config"] = replace(CONFIG, owner_telegram_id=7)

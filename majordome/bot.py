@@ -3,11 +3,13 @@
 import logging
 from datetime import datetime
 
-from telegram import Update
+from telegram import InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -16,7 +18,8 @@ from telegram.ext import (
 )
 
 from .actions import execute, format_brief, format_tasks
-from .brain import Brain, BrainError, Reply, SetBriefTime
+from .brain import Brain, BrainError, ListTasks, Reply, SetBriefTime
+from .buttons import parse_callback, tick, today_keyboard
 from .config import Config
 from .db import Database
 from .scheduler import schedule_brief
@@ -70,6 +73,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "Bonjour, je suis Majordome 🎩\n\n"
             "Écris-moi ou envoie un message vocal : dis-moi ce que tu as à faire (« appeler la banque vendredi à 15h »), "
             "ce que tu as fait (« j'ai pris mes compléments »), "
+            "tes routines (« salle de sport le lundi et le mardi à 18h »), "
             "ou demande « qu'est-ce qu'il me reste aujourd'hui ? ». /today affiche ta liste."
         )
         if brief_time:
@@ -79,6 +83,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "Hello, I'm Majordome 🎩\n\n"
             "Write or send a voice note: tell me what you need to do (\"call the bank on Friday at 3pm\"), "
             "what you've done (\"I took my supplements\"), "
+            "your routines (\"gym on Mondays and Tuesdays at 6pm\"), "
             "or ask \"what's left today?\". /today shows your list."
         )
         if brief_time:
@@ -165,6 +170,7 @@ async def understand_and_reply(update: Update, context: ContextTypes.DEFAULT_TYP
     await message.chat.send_action(ChatAction.TYPING)
 
     now = owner_now(context)
+    keyboard = None
     try:
         routines = [(r, db.is_routine_done(r.id, now.date())) for r in db.active_routines()]
         actions = await brain.interpret(text, now, db.open_tasks(limit=50), routines)
@@ -179,10 +185,13 @@ async def understand_and_reply(update: Update, context: ContextTypes.DEFAULT_TYP
             db.set_language(languages[0])
         if any(isinstance(action, SetBriefTime) for action in actions):
             schedule_brief(context.application)
+        # "What's left today?" gets ✅ buttons, like /today.
+        if any(isinstance(a, ListTasks) and a.start == a.end == now.date() for a in actions):
+            keyboard = today_keyboard(db, now, db.get_language())
 
     if heard:
         replies.insert(0, f"🎙️ \"{text}\"")
-    await message.reply_text("\n\n".join(replies))
+    await message.reply_text("\n\n".join(replies), reply_markup=keyboard)
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -218,14 +227,44 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db: Database = context.bot_data["db"]
     lang = "fr" if is_french(update) else "en"
     now = owner_now(context)
-    await update.effective_message.reply_text(format_tasks(db, now, now.date(), now.date(), lang))
+    text = format_tasks(db, now, now.date(), now.date(), lang)
+    await update.effective_message.reply_text(text, reply_markup=today_keyboard(db, now, lang))
 
 
 async def brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/brief: show the morning brief now."""
     db: Database = context.bot_data["db"]
     lang = "fr" if is_french(update) else "en"
-    await update.effective_message.reply_text(format_brief(db, owner_now(context), lang))
+    now = owner_now(context)
+    await update.effective_message.reply_text(format_brief(db, now, lang), reply_markup=today_keyboard(db, now, lang))
+
+
+async def on_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """A ✅ button was tapped: tick the item off, then refresh the list."""
+    query = update.callback_query
+    tap = parse_callback(query.data)
+    if tap is None:
+        await query.answer()
+        return
+    db: Database = context.bot_data["db"]
+    title = tick(db, tap)
+    # answer() shows a short pop-up and stops the button's loading spinner.
+    await query.answer(f"✅ {title}" if title else pick(update, ("Déjà fait 👍", "Already done 👍")))
+
+    now = owner_now(context)
+    if tap.day == now.date():
+        # Today's list: rewrite it with what's left now (also picks up anything added since).
+        lang = db.get_language()
+        text = format_tasks(db, now, now.date(), now.date(), lang)
+        try:
+            await query.edit_message_text(text, reply_markup=today_keyboard(db, now, lang))
+        except BadRequest as error:
+            if "not modified" not in str(error).lower():  # same text twice is fine
+                raise
+    else:
+        # An older day's list: just remove the tapped button.
+        rows = [row for row in query.message.reply_markup.inline_keyboard if row[0].callback_data != query.data]
+        await query.edit_message_reply_markup(InlineKeyboardMarkup(rows) if rows else None)
 
 
 async def unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -261,6 +300,7 @@ def build_application(config: Config, db: Database) -> Application:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("today", today))
     app.add_handler(CommandHandler("brief", brief))
+    app.add_handler(CallbackQueryHandler(on_done))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(~filters.COMMAND, unsupported))
