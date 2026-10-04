@@ -9,6 +9,7 @@ We turn those requests into Action objects; actions.py then does the real work.
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import anthropic
 
@@ -253,29 +254,27 @@ TOOLS = [
         },
     },
     {
-        "name": "set_daily_time",
-        "description": "Change the time of a daily message (morning brief or evening check-in), or turn it off.",
+        "name": "update_settings",
+        "description": "Change one of the user's settings. Call it once per setting.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "message": {"type": "string", "enum": ["brief", "checkin"]},
-                "time": {**NULLABLE_STRING, "description": "New time as HH:MM (24h), or null to turn it off."},
+                "setting": {
+                    "type": "string",
+                    "enum": ["brief_time", "checkin_time", "reminder_minutes", "timezone", "quiet_hours"],
+                },
+                "value": {
+                    **NULLABLE_STRING,
+                    "description": (
+                        "brief_time / checkin_time: HH:MM, or null to turn it off. "
+                        "reminder_minutes: minutes before timed things, \"0\" = no reminders. "
+                        "timezone: IANA name for where they live, e.g. America/Montreal. "
+                        "quiet_hours: HH:MM-HH:MM (no reminders in between), or null to turn off."
+                    ),
+                },
                 "language": LANGUAGE,
             },
-            "required": ["message", "time", "language"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "set_reminders",
-        "description": "Change how long before a timed task or routine the reminder comes, or turn reminders off.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "minutes_before": {"type": "integer", "description": "Minutes before; 0 turns reminders off."},
-                "language": LANGUAGE,
-            },
-            "required": ["minutes_before", "language"],
+            "required": ["setting", "value", "language"],
             "additionalProperties": False,
         },
     },
@@ -317,8 +316,7 @@ SYSTEM_PROMPT = """You are Majordome, a personal assistant in Telegram. The user
 - add_to_list: shopping items, ideas, notes to keep ("note : ...", "add milk"). Notes and ideas go in a list such as "Notes" or "Idées". check_list_items when bought or done, clear_list to empty a list.
 - show: their routines, Someday list, or lists and notes.
 - reschedule_tasks: move existing tasks to another day or time ("move the bank to Friday").
-- set_daily_time: they want the morning brief (their day's list) or the evening check-in (what's left, in the evening) at another time, or not at all.
-- set_reminders: they want reminders earlier or later before timed things, or none.
+- update_settings: morning brief time (their day's list), evening check-in time (what's left), how long before timed things to remind them, their timezone (where they live: "I'm in Montreal now"), quiet hours (no reminders at night). In French, « plus de brief / de rappels / d'heures calmes » means turning it off.
 - list_tasks: they ask what they have to do on a day or over a period ("what's left today?", "tomorrow?", "this week?").
 
 If no tool fits, a completion matches no open task, or the request is too unclear, call no tool and reply in one or two short sentences, in the user's language."""
@@ -428,15 +426,11 @@ class ListTasks:
 
 
 @dataclass(frozen=True)
-class SetDailyTime:
-    message: str  # "brief" or "checkin"
-    time: time | None  # None = turned off
-    language: str
-
-
-@dataclass(frozen=True)
-class SetReminders:
-    minutes_before: int  # 0 = off
+class UpdateSetting:
+    setting: str  # see SETTINGS
+    # brief_time / checkin_time: time or None (off); reminder_minutes: int (0 = off);
+    # timezone: ZoneInfo; quiet_hours: (start, end) times or None (off)
+    value: object
     language: str
 
 
@@ -455,7 +449,7 @@ class Reply:
     text: str
 
 
-Action = AddTasks | CompleteTasks | ListTasks | AddRoutine | UpdateRoutine | RemoveRoutines | Show | AddSomeday | CloseSomeday | PromoteSomeday | AddToList | CheckListItems | ClearList | RescheduleTasks | SetDailyTime | SetReminders | Reply
+Action = AddTasks | CompleteTasks | ListTasks | AddRoutine | UpdateRoutine | RemoveRoutines | Show | AddSomeday | CloseSomeday | PromoteSomeday | AddToList | CheckListItems | ClearList | RescheduleTasks | UpdateSetting | Reply
 
 
 class BrainError(Exception):
@@ -489,6 +483,26 @@ def _ids(value) -> list[int]:
     if not isinstance(value, list):
         raise TypeError(f"expected a list of numbers, got {value!r}")
     return [int(i) for i in value]
+
+
+def _setting_value(setting: str, value: str | None) -> object:
+    """Check and convert a settings value sent by Claude (see the update_settings tool)."""
+    value = value.strip() if isinstance(value, str) else None
+    if setting in ("brief_time", "checkin_time"):
+        return _parse_time(value)
+    if setting == "reminder_minutes":
+        return max(0, int(value or 0))
+    if setting == "timezone":
+        try:
+            return ZoneInfo(value or "")
+        except (ZoneInfoNotFoundError, ValueError):
+            raise BrainError("bad_answer", f"unknown timezone {value!r}") from None
+    if setting == "quiet_hours":
+        if not value:
+            return None
+        start, end = value.split("-")
+        return _parse_time(start.strip()), _parse_time(end.strip())
+    raise BrainError("bad_answer", f"unknown setting {setting!r}")
 
 
 def _language(data: dict) -> str:
@@ -573,12 +587,8 @@ def _parse_tool_call(name: str, data: dict) -> Action:
         if not start or not end:
             raise BrainError("bad_answer", "list_tasks without dates")
         return ListTasks(start=min(start, end), end=max(start, end), language=_language(data))
-    if name == "set_daily_time":
-        if data.get("message") not in ("brief", "checkin"):
-            raise BrainError("bad_answer", "set_daily_time with unknown message")
-        return SetDailyTime(message=data["message"], time=_parse_time(data.get("time")), language=_language(data))
-    if name == "set_reminders":
-        return SetReminders(minutes_before=max(0, int(data["minutes_before"])), language=_language(data))
+    if name == "update_settings":
+        return UpdateSetting(data["setting"], _setting_value(data["setting"], data.get("value")), _language(data))
     if name == "reschedule_tasks":
         due_date = _parse_date(data.get("due_date"))
         if due_date is None:
@@ -651,10 +661,12 @@ def build_context(text: str, now: datetime, snapshot: Snapshot) -> str:
 
 
 class Brain:
-    def __init__(self, api_key: str, model: str):
+    def __init__(self, api_key: str, model: str, on_usage=None):
+        """`on_usage(model, input_tokens, output_tokens)` is called after each request (for /usage)."""
         # max_retries: the SDK retries rate limits, overloads and network errors itself.
         self.client = anthropic.AsyncAnthropic(api_key=api_key, timeout=30.0, max_retries=2)
         self.model = model
+        self.on_usage = on_usage
 
     async def interpret(self, text: str, now: datetime, snapshot: Snapshot) -> list[Action]:
         try:
@@ -682,4 +694,6 @@ class Brain:
         except anthropic.APIConnectionError as error:  # includes timeouts
             raise BrainError("network", str(error)) from error
         log.info("Claude usage: %s in / %s out tokens", message.usage.input_tokens, message.usage.output_tokens)
+        if self.on_usage:
+            self.on_usage(self.model, message.usage.input_tokens, message.usage.output_tokens)
         return parse_response(message)

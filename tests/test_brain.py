@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from majordome.brain import AddSomeday, AddToList, CheckListItems, ClearList, CloseSomeday, NewSomeday, PromoteSomeday, Show, Snapshot, build_context, AddRoutine, AddTasks, RemoveRoutines, UpdateRoutine, BrainError, CompleteTasks, ListTasks, NewTask, Reply, RescheduleTasks, SetDailyTime, SetReminders, parse_response
+from majordome.brain import AddSomeday, AddToList, CheckListItems, ClearList, CloseSomeday, NewSomeday, PromoteSomeday, Show, Snapshot, build_context, AddRoutine, AddTasks, RemoveRoutines, UpdateRoutine, BrainError, CompleteTasks, ListTasks, NewTask, Reply, RescheduleTasks, UpdateSetting, parse_response
 
 
 def answer(*blocks, stop_reason="tool_use"):
@@ -81,18 +81,33 @@ def test_unusable_answers(message):
 
 
 def test_settings_and_reschedule_tools():
+    from zoneinfo import ZoneInfo
+
+    def setting(name, value):
+        return tool("update_settings", {"setting": name, "value": value, "language": "fr"})
+
     message = answer(
-        tool("set_daily_time", {"message": "brief", "time": "07:30", "language": "fr"}),
-        tool("set_daily_time", {"message": "checkin", "time": None, "language": "fr"}),
-        tool("set_reminders", {"minutes_before": 15, "language": "en"}),
+        setting("brief_time", "07:30"),
+        setting("checkin_time", None),
+        setting("reminder_minutes", "15"),
+        setting("timezone", "America/Montreal"),
+        setting("quiet_hours", "22:00-07:00"),
         tool("reschedule_tasks", {"task_ids": [4], "due_date": "2026-10-09", "due_time": None, "language": "en"}),
     )
     assert parse_response(message) == [
-        SetDailyTime("brief", time(7, 30), "fr"),
-        SetDailyTime("checkin", None, "fr"),
-        SetReminders(15, "en"),
+        UpdateSetting("brief_time", time(7, 30), "fr"),
+        UpdateSetting("checkin_time", None, "fr"),
+        UpdateSetting("reminder_minutes", 15, "fr"),
+        UpdateSetting("timezone", ZoneInfo("America/Montreal"), "fr"),
+        UpdateSetting("quiet_hours", (time(22, 0), time(7, 0)), "fr"),
         RescheduleTasks([4], date(2026, 10, 9), None, "en"),
     ]
+
+
+def test_invalid_settings():
+    for name, value in [("timezone", "Mars/Olympus"), ("quiet_hours", "22h"), ("brief_time", "7h"), ("colour", "blue")]:
+        with pytest.raises(BrainError):
+            parse_response(answer(tool("update_settings", {"setting": name, "value": value, "language": "en"})))
 
 
 def test_routine_tools():
