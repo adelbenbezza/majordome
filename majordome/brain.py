@@ -12,7 +12,7 @@ from datetime import date, datetime, time
 
 import anthropic
 
-from .db import Routine, Task
+from .db import ListItem, Routine, SomedayItem, Task
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +30,6 @@ TOOLS = [
     {
         "name": "add_tasks",
         "description": "Add one or more tasks the user wants to do or remember.",
-        "strict": True,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -65,7 +64,6 @@ TOOLS = [
     {
         "name": "complete_tasks",
         "description": "Mark open tasks and/or today's routines as done, when the user says they did them.",
-        "strict": True,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -88,7 +86,6 @@ TOOLS = [
     {
         "name": "list_tasks",
         "description": "Show the tasks for a day or a period (today, tomorrow, Friday, this week...).",
-        "strict": True,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -103,7 +100,6 @@ TOOLS = [
     {
         "name": "add_routine",
         "description": "Add a recurring routine: something done on given weekdays, every week.",
-        "strict": True,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -123,7 +119,6 @@ TOOLS = [
     {
         "name": "update_routine",
         "description": "Change an existing routine's title, days or time. Give the full new version.",
-        "strict": True,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -140,7 +135,6 @@ TOOLS = [
     {
         "name": "remove_routines",
         "description": "Stop routines the user no longer wants.",
-        "strict": True,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -152,20 +146,115 @@ TOOLS = [
         },
     },
     {
-        "name": "list_routines",
-        "description": "Show all the user's routines.",
-        "strict": True,
+        "name": "show",
+        "description": "Show the user's routines, Someday list, or notes and lists.",
         "input_schema": {
             "type": "object",
-            "properties": {"language": LANGUAGE},
-            "required": ["language"],
+            "properties": {
+                "what": {"type": "string", "enum": ["routines", "someday", "lists"]},
+                "name": {
+                    **NULLABLE_STRING,
+                    "description": "For lists: the list to show (null = overview of all lists). For someday: a category, or null for all.",
+                },
+                "language": LANGUAGE,
+            },
+            "required": ["what", "name", "language"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "add_someday",
+        "description": "Add wishes with no date to the Someday list (books to read, things to learn, places to visit...).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "description": "Short, in the user's language."},
+                            "category": {"type": "string", "description": "Reuse an existing category if one fits; else a short new one in the user's language."},
+                        },
+                        "required": ["title", "category"],
+                        "additionalProperties": False,
+                    },
+                },
+                "language": LANGUAGE,
+            },
+            "required": ["items", "language"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "close_someday",
+        "description": "Take wishes off the Someday list: achieved (done=true) or no longer wanted (done=false).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "someday_ids": {"type": "array", "items": {"type": "integer"}, "description": "Numbers from the Someday list (s4 -> 4)."},
+                "done": {"type": "boolean"},
+                "language": LANGUAGE,
+            },
+            "required": ["someday_ids", "done", "language"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "promote_someday",
+        "description": "Turn a Someday wish into a dated task.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "someday_id": {"type": "integer", "description": "Number from the Someday list (s4 -> 4)."},
+                "due_date": {"type": "string", "description": "Day as YYYY-MM-DD."},
+                "due_time": {**NULLABLE_STRING, "description": "Time as HH:MM (24h), or null."},
+                "language": LANGUAGE,
+            },
+            "required": ["someday_id", "due_date", "due_time", "language"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "add_to_list",
+        "description": "Add items or notes to a named list (shopping list, ideas, notes...). Creates the list if needed.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "list": {"type": "string", "description": "Reuse an existing list name if one fits."},
+                "items": {"type": "array", "items": {"type": "string"}},
+                "language": LANGUAGE,
+            },
+            "required": ["list", "items", "language"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "check_list_items",
+        "description": "Tick items off their lists (bought, done, no longer needed).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "item_ids": {"type": "array", "items": {"type": "integer"}, "description": "Numbers from the lists (l12 -> 12)."},
+                "language": LANGUAGE,
+            },
+            "required": ["item_ids", "language"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "clear_list",
+        "description": "Empty a whole list.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"list": {"type": "string"}, "language": LANGUAGE},
+            "required": ["list", "language"],
             "additionalProperties": False,
         },
     },
     {
         "name": "set_daily_time",
         "description": "Change the time of a daily message (morning brief or evening check-in), or turn it off.",
-        "strict": True,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -180,7 +269,6 @@ TOOLS = [
     {
         "name": "set_reminders",
         "description": "Change how long before a timed task or routine the reminder comes, or turn reminders off.",
-        "strict": True,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -194,7 +282,6 @@ TOOLS = [
     {
         "name": "reschedule_tasks",
         "description": "Move open tasks to another day and/or time.",
-        "strict": True,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -209,13 +296,26 @@ TOOLS = [
     },
 ]
 
+# "strict" makes the API guarantee Claude's tool input matches the schema exactly. The API
+# compiles all strict schemas into one grammar with a size limit (16 strict tools was too
+# many), so only the most used and richest tools are strict. parse_tool_call checks
+# every tool's input anyway.
+STRICT_TOOLS = {
+    "add_tasks", "complete_tasks", "list_tasks", "reschedule_tasks",
+    "add_routine", "update_routine", "add_someday", "add_to_list",
+}
+TOOLS = [{**tool, "strict": tool["name"] in STRICT_TOOLS} for tool in TOOLS]
+
 SYSTEM_PROMPT = """You are Majordome, a personal assistant in Telegram. The user writes in French or English, sometimes mixing both. Work out what they want and call the matching tool. One message can need several tool calls.
 
 - add_tasks: they want to do or remember something. Resolve dates and times relative to the current date and time given with the message. If no day is mentioned, due_date is null, except when a time is given: then use today, or tomorrow if that time has already passed.
 - complete_tasks: they say they did something. Match it by meaning to the open tasks and routines listed with the message, and only use numbers from those lists.
 - add_routine: something that repeats every week ("gym every Monday and Tuesday at 6pm", "supplements every day", "tous les mardis"). Never add a repeating thing as tasks.
 - update_routine: change an existing routine's days, time or title (keep whatever they didn't mention).
-- remove_routines / list_routines: they want to stop a routine, or see their routines.
+- remove_routines: they want to stop a routine.
+- add_someday: the Someday list (called « Un jour » in French) holds wishes with no date or deadline ("I'd like to learn guitar one day", "livre à lire : Dune"). close_someday when one is achieved or dropped, promote_someday to plan it on a day.
+- add_to_list: shopping items, ideas, notes to keep ("note : ...", "add milk"). Notes and ideas go in a list such as "Notes" or "Idées". check_list_items when bought or done, clear_list to empty a list.
+- show: their routines, Someday list, or lists and notes.
 - reschedule_tasks: move existing tasks to another day or time ("move the bank to Friday").
 - set_daily_time: they want the morning brief (their day's list) or the evening check-in (what's left, in the evening) at another time, or not at all.
 - set_reminders: they want reminders earlier or later before timed things, or none.
@@ -268,7 +368,55 @@ class RemoveRoutines:
 
 
 @dataclass(frozen=True)
-class ListRoutines:
+class Show:
+    what: str  # "routines", "someday" or "lists"
+    name: str | None  # a list name, or a Someday category
+    language: str
+
+
+@dataclass(frozen=True)
+class NewSomeday:
+    title: str
+    category: str
+
+
+@dataclass(frozen=True)
+class AddSomeday:
+    items: list[NewSomeday]
+    language: str
+
+
+@dataclass(frozen=True)
+class CloseSomeday:
+    someday_ids: list[int]
+    done: bool
+    language: str
+
+
+@dataclass(frozen=True)
+class PromoteSomeday:
+    someday_id: int
+    due_date: date
+    due_time: time | None
+    language: str
+
+
+@dataclass(frozen=True)
+class AddToList:
+    list: str
+    items: list[str]
+    language: str
+
+
+@dataclass(frozen=True)
+class CheckListItems:
+    item_ids: list[int]
+    language: str
+
+
+@dataclass(frozen=True)
+class ClearList:
+    list: str
     language: str
 
 
@@ -307,7 +455,7 @@ class Reply:
     text: str
 
 
-Action = AddTasks | CompleteTasks | ListTasks | AddRoutine | UpdateRoutine | RemoveRoutines | ListRoutines | RescheduleTasks | SetDailyTime | SetReminders | Reply
+Action = AddTasks | CompleteTasks | ListTasks | AddRoutine | UpdateRoutine | RemoveRoutines | Show | AddSomeday | CloseSomeday | PromoteSomeday | AddToList | CheckListItems | ClearList | RescheduleTasks | SetDailyTime | SetReminders | Reply
 
 
 class BrainError(Exception):
@@ -336,12 +484,27 @@ def _parse_time(value: str | None) -> time | None:
         raise BrainError("bad_answer", f"invalid time {value!r}") from None
 
 
+def _ids(value) -> list[int]:
+    """A list of item numbers. Refuses a bare string, which would be read digit by digit."""
+    if not isinstance(value, list):
+        raise TypeError(f"expected a list of numbers, got {value!r}")
+    return [int(i) for i in value]
+
+
 def _language(data: dict) -> str:
     return "fr" if data.get("language") == "fr" else "en"
 
 
 def parse_tool_call(name: str, data: dict) -> Action:
     """Turn one tool call from Claude into an Action, checking every field."""
+    try:
+        return _parse_tool_call(name, data)
+    except (KeyError, TypeError, ValueError, AttributeError) as error:
+        # A missing field or a wrong type (possible on non-strict tools).
+        raise BrainError("bad_answer", f"{name}: {error!r}") from None
+
+
+def _parse_tool_call(name: str, data: dict) -> Action:
     if name == "add_tasks":
         tasks = [
             NewTask(
@@ -357,8 +520,8 @@ def parse_tool_call(name: str, data: dict) -> Action:
         return AddTasks(tasks=tasks, language=_language(data))
     if name == "complete_tasks":
         return CompleteTasks(
-            task_ids=[int(i) for i in data.get("task_ids", [])],
-            routine_ids=[int(i) for i in data.get("routine_ids", [])],
+            task_ids=_ids(data.get("task_ids", [])),
+            routine_ids=_ids(data.get("routine_ids", [])),
             language=_language(data),
         )
     if name in ("add_routine", "update_routine"):
@@ -371,9 +534,40 @@ def parse_tool_call(name: str, data: dict) -> Action:
             return AddRoutine(title=title, weekdays=weekdays, time=at, language=language)
         return UpdateRoutine(routine_id=int(data["routine_id"]), title=title, weekdays=weekdays, time=at, language=language)
     if name == "remove_routines":
-        return RemoveRoutines(routine_ids=[int(i) for i in data.get("routine_ids", [])], language=_language(data))
-    if name == "list_routines":
-        return ListRoutines(language=_language(data))
+        return RemoveRoutines(routine_ids=_ids(data.get("routine_ids", [])), language=_language(data))
+    if name == "show":
+        if data.get("what") not in ("routines", "someday", "lists"):
+            raise BrainError("bad_answer", "show with unknown what")
+        return Show(what=data["what"], name=(data.get("name") or "").strip() or None, language=_language(data))
+    if name == "add_someday":
+        items = [
+            NewSomeday(str(i["title"]).strip(), str(i.get("category") or "").strip() or "?")
+            for i in data.get("items", [])
+            if str(i.get("title", "")).strip()
+        ]
+        if not items:
+            raise BrainError("bad_answer", "add_someday without items")
+        return AddSomeday(items=items, language=_language(data))
+    if name == "close_someday":
+        return CloseSomeday(_ids(data.get("someday_ids", [])), bool(data.get("done")), _language(data))
+    if name == "promote_someday":
+        due_date = _parse_date(data.get("due_date"))
+        if due_date is None:
+            raise BrainError("bad_answer", "promote_someday without a day")
+        return PromoteSomeday(int(data["someday_id"]), due_date, _parse_time(data.get("due_time")), _language(data))
+    if name == "add_to_list":
+        list_name = str(data.get("list", "")).strip()
+        items = [str(i).strip() for i in data.get("items", []) if str(i).strip()]
+        if not list_name or not items:
+            raise BrainError("bad_answer", "add_to_list without list or items")
+        return AddToList(list=list_name, items=items, language=_language(data))
+    if name == "check_list_items":
+        return CheckListItems(_ids(data.get("item_ids", [])), _language(data))
+    if name == "clear_list":
+        list_name = str(data.get("list", "")).strip()
+        if not list_name:
+            raise BrainError("bad_answer", "clear_list without a list")
+        return ClearList(list=list_name, language=_language(data))
     if name == "list_tasks":
         start, end = _parse_date(data.get("from_date")), _parse_date(data.get("to_date"))
         if not start or not end:
@@ -390,7 +584,7 @@ def parse_tool_call(name: str, data: dict) -> Action:
         if due_date is None:
             raise BrainError("bad_answer", "reschedule_tasks without a day")
         return RescheduleTasks(
-            task_ids=[int(i) for i in data.get("task_ids", [])],
+            task_ids=_ids(data.get("task_ids", [])),
             due_date=due_date,
             due_time=_parse_time(data.get("due_time")),
             language=_language(data),
@@ -414,25 +608,44 @@ def parse_response(message) -> list[Action]:
     return [Reply(text)]
 
 
-def build_context(text: str, now: datetime, open_tasks: list[Task], routines: list[tuple[Routine, bool]]) -> str:
-    """The user turn: current time, open tasks and routines (to match completions), then the message.
+@dataclass
+class Snapshot:
+    """What Claude needs to see to understand a message: the user's current things.
 
-    `routines`: each active routine with whether it's already done today.
+    Only open items are sent (not history) to keep requests short and cheap.
     """
+
+    open_tasks: list[Task] = field(default_factory=list)
+    routines: list[tuple[Routine, bool]] = field(default_factory=list)  # (routine, done today?)
+    someday: list[SomedayItem] = field(default_factory=list)
+    list_items: list[ListItem] = field(default_factory=list)
+    list_names: list[str] = field(default_factory=list)
+
+
+def build_context(text: str, now: datetime, snapshot: Snapshot) -> str:
+    """The user turn: current time, the user's open things (to match by number), then the message."""
     lines = [f"Now: {now:%A %Y-%m-%d %H:%M} ({now.tzinfo})", "Open tasks:"]
-    for task in open_tasks:
+    for task in snapshot.open_tasks:
         due = f" (due {task.due_date})" if task.due_date else ""
         lines.append(f"#{task.id} {task.title}{due}")
-    if not open_tasks:
+    if not snapshot.open_tasks:
         lines.append("(none)")
     lines.append("Routines:")
-    for routine, done_today in routines:
+    for routine, done_today in snapshot.routines:
         days = "every day" if routine.daily else ", ".join(WEEKDAY_NAMES[d] for d in routine.weekdays)
         at = f" at {routine.time:%H:%M}" if routine.time else ""
         status = "done today" if done_today else "not done today"
         lines.append(f"r{routine.id} {routine.title} ({days}{at}; {status})")
-    if not routines:
+    if not snapshot.routines:
         lines.append("(none)")
+    lines.append("Someday list:")
+    for item in snapshot.someday:
+        lines.append(f"s{item.id} {item.title} [{item.category}]")
+    if not snapshot.someday:
+        lines.append("(none)")
+    lines.append("Lists: " + (", ".join(snapshot.list_names) or "(none)"))
+    for item in snapshot.list_items:
+        lines.append(f"l{item.id} {item.text} [{item.list_name}]")
     lines.append(f"<message>\n{text}\n</message>")
     return "\n".join(lines)
 
@@ -443,9 +656,7 @@ class Brain:
         self.client = anthropic.AsyncAnthropic(api_key=api_key, timeout=30.0, max_retries=2)
         self.model = model
 
-    async def interpret(
-        self, text: str, now: datetime, open_tasks: list[Task], routines: list[tuple[Routine, bool]] = ()
-    ) -> list[Action]:
+    async def interpret(self, text: str, now: datetime, snapshot: Snapshot) -> list[Action]:
         try:
             message = await self.client.messages.create(
                 model=self.model,
@@ -455,7 +666,7 @@ class Brain:
                 # "auto" lets Claude answer in words when no tool fits. It also works on every
                 # model: newer ones refuse forced tool use.
                 tool_choice={"type": "auto"},
-                messages=[{"role": "user", "content": build_context(text, now, open_tasks, list(routines))}],
+                messages=[{"role": "user", "content": build_context(text, now, snapshot)}],
             )
         except anthropic.AuthenticationError as error:
             raise BrainError("auth", str(error)) from error

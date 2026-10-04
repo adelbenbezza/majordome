@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from majordome.brain import AddRoutine, AddTasks, ListRoutines, RemoveRoutines, UpdateRoutine, BrainError, CompleteTasks, ListTasks, NewTask, Reply, RescheduleTasks, SetDailyTime, SetReminders, parse_response
+from majordome.brain import AddSomeday, AddToList, CheckListItems, ClearList, CloseSomeday, NewSomeday, PromoteSomeday, Show, Snapshot, build_context, AddRoutine, AddTasks, RemoveRoutines, UpdateRoutine, BrainError, CompleteTasks, ListTasks, NewTask, Reply, RescheduleTasks, SetDailyTime, SetReminders, parse_response
 
 
 def answer(*blocks, stop_reason="tool_use"):
@@ -101,17 +101,84 @@ def test_routine_tools():
         tool("complete_tasks", {"task_ids": [], "routine_ids": [2], "language": "fr"}),
         tool("update_routine", {"routine_id": 1, "title": "Gym", "weekdays": ["mon"], "time": None, "language": "fr"}),
         tool("remove_routines", {"routine_ids": [4], "language": "fr"}),
-        tool("list_routines", {"language": "en"}),
+        tool("show", {"what": "routines", "name": None, "language": "en"}),
     )
     assert parse_response(message) == [
         AddRoutine("Gym", [0, 1], time(18, 0), "fr"),
         CompleteTasks([], "fr", routine_ids=[2]),
         UpdateRoutine(1, "Gym", [0], None, "fr"),
         RemoveRoutines([4], "fr"),
-        ListRoutines("en"),
+        Show("routines", None, "en"),
     ]
 
 
 def test_routine_without_days_is_invalid():
     with pytest.raises(BrainError):
         parse_response(answer(tool("add_routine", {"title": "Gym", "weekdays": [], "time": None, "language": "en"})))
+
+
+def test_someday_and_list_tools():
+    message = answer(
+        tool("add_someday", {"items": [{"title": "Lire Dune", "category": "Livres"}], "language": "fr"}),
+        tool("close_someday", {"someday_ids": [2], "done": True, "language": "fr"}),
+        tool("promote_someday", {"someday_id": 3, "due_date": "2026-10-10", "due_time": None, "language": "fr"}),
+        tool("add_to_list", {"list": "Courses", "items": ["lait", " "], "language": "fr"}),
+        tool("check_list_items", {"item_ids": [7], "language": "fr"}),
+        tool("clear_list", {"list": "Courses", "language": "fr"}),
+        tool("show", {"what": "lists", "name": "Courses", "language": "fr"}),
+    )
+    assert parse_response(message) == [
+        AddSomeday([NewSomeday("Lire Dune", "Livres")], "fr"),
+        CloseSomeday([2], True, "fr"),
+        PromoteSomeday(3, date(2026, 10, 10), None, "fr"),
+        AddToList("Courses", ["lait"], "fr"),  # blank items dropped
+        CheckListItems([7], "fr"),
+        ClearList("Courses", "fr"),
+        Show("lists", "Courses", "fr"),
+    ]
+
+
+def test_context_lists_everything_with_numbers():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from majordome.db import ListItem, SomedayItem, Task
+
+    snapshot = Snapshot(
+        open_tasks=[Task(1, "Bank", date(2026, 10, 9), None, None)],
+        someday=[SomedayItem(4, "Lire Dune", "Livres")],
+        list_items=[ListItem(12, "Courses", "lait")],
+        list_names=["Courses", "Idées"],
+    )
+    context = build_context("j'ai acheté le lait", datetime(2026, 10, 4, 18, 0, tzinfo=ZoneInfo("Europe/Paris")), snapshot)
+    assert context.splitlines() == [
+        "Now: Sunday 2026-10-04 18:00 (Europe/Paris)",
+        "Open tasks:",
+        "#1 Bank (due 2026-10-09)",
+        "Routines:",
+        "(none)",
+        "Someday list:",
+        "s4 Lire Dune [Livres]",
+        "Lists: Courses, Idées",
+        "l12 lait [Courses]",
+        "<message>",
+        "j'ai acheté le lait",
+        "</message>",
+    ]
+
+
+def test_strict_tools_stay_under_the_api_limit():
+    from majordome.brain import TOOLS
+
+    # The API rejected 16 strict tools ("compiled grammar is too large"); 10 worked.
+    assert sum(tool["strict"] for tool in TOOLS) <= 8
+
+
+def test_malformed_tool_input_is_a_brain_error():
+    for name, data in [
+        ("update_routine", {"title": "Gym", "weekdays": ["mon"], "time": None, "language": "en"}),  # no routine_id
+        ("set_reminders", {"minutes_before": "soon", "language": "en"}),
+        ("close_someday", {"someday_ids": "4", "done": True, "language": "en"}),
+    ]:
+        with pytest.raises(BrainError):
+            parse_response(answer(tool(name, data)))
