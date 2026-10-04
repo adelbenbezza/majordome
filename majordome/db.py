@@ -10,6 +10,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 MIGRATIONS: list[str] = [
     # 1: key/value settings (owner, brief time, language...). Shared later with the dashboard.
@@ -94,6 +95,19 @@ MIGRATIONS: list[str] = [
         done_at    TEXT
     );
     """,
+    # 6: AI usage, to tell the owner what the bot costs them (/usage).
+    # service: "claude" (tokens) or "whisper" (seconds of audio).
+    """
+    CREATE TABLE usage (
+        id            INTEGER PRIMARY KEY,
+        at            TEXT NOT NULL,
+        service       TEXT NOT NULL,
+        model         TEXT NOT NULL,
+        input_tokens  INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        seconds       REAL NOT NULL DEFAULT 0
+    );
+    """,
 ]
 
 OWNER_KEY = "owner_telegram_id"
@@ -102,6 +116,8 @@ OWNER_KEY = "owner_telegram_id"
 DAILY_MESSAGES = {"brief": time(8, 0), "checkin": time(21, 0)}
 REMINDER_MINUTES_KEY = "reminder_minutes"  # how long before a timed item to remind; 0 = off
 DEFAULT_REMINDER_MINUTES = 30
+TIMEZONE_KEY = "timezone"  # e.g. "America/Montreal"; if unset, the TIMEZONE variable is used
+QUIET_HOURS_KEY = "quiet_hours"  # "22:00-07:00": no reminders in between; unset = off
 LANGUAGE_KEY = "language"  # "fr" or "en": used for messages the bot sends on its own
 GENERATION_KEY = "generation"  # goes up by one at each reset (see wipe_history)
 
@@ -254,6 +270,23 @@ class Database:
 
     def set_reminder_minutes(self, minutes: int) -> None:
         self.set_setting(REMINDER_MINUTES_KEY, str(max(0, minutes)))
+
+    def get_timezone(self, default: ZoneInfo) -> ZoneInfo:
+        value = self.get_setting(TIMEZONE_KEY)
+        return ZoneInfo(value) if value else default
+
+    def set_timezone(self, tz: ZoneInfo) -> None:
+        self.set_setting(TIMEZONE_KEY, tz.key)
+
+    def get_quiet_hours(self) -> tuple[time, time] | None:
+        value = self.get_setting(QUIET_HOURS_KEY)
+        if not value or value == "off":
+            return None
+        start, end = value.split("-")
+        return time.fromisoformat(start), time.fromisoformat(end)
+
+    def set_quiet_hours(self, hours: tuple[time, time] | None) -> None:
+        self.set_setting(QUIET_HOURS_KEY, f"{hours[0]:%H:%M}-{hours[1]:%H:%M}" if hours else "off")
 
     def get_language(self) -> str:
         return self.get_setting(LANGUAGE_KEY) or "en"
@@ -551,3 +584,23 @@ class Database:
                 (utc_now().isoformat(), found[0]),
             )
         return found[1]
+
+    # --- usage ------------------------------------------------------------
+
+    def record_usage(
+        self, service: str, model: str, input_tokens: int = 0, output_tokens: int = 0, seconds: float = 0
+    ) -> None:
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO usage (at, service, model, input_tokens, output_tokens, seconds) VALUES (?, ?, ?, ?, ?, ?)",
+                (utc_now().isoformat(), service, model, input_tokens, output_tokens, seconds),
+            )
+
+    def usage_since(self, start: datetime) -> list[tuple[str, str, int, int, float, int]]:
+        """Totals per (service, model) since `start`: input tokens, output tokens, seconds, calls."""
+        rows = self.conn.execute(
+            "SELECT service, model, SUM(input_tokens), SUM(output_tokens), SUM(seconds), COUNT(*) "
+            "FROM usage WHERE at >= ? GROUP BY service, model ORDER BY service, model",
+            (start.astimezone(timezone.utc).isoformat(),),
+        ).fetchall()
+        return [tuple(row) for row in rows]

@@ -153,3 +153,30 @@ def test_wipe_includes_someday_and_lists():
     db.add_to_list("Courses", ["lait"])
     db.wipe_history()
     assert db.open_someday() == [] and db.list_names() == []
+
+
+def test_timezone_quiet_hours_and_usage():
+    from datetime import datetime, time, timedelta, timezone
+    from zoneinfo import ZoneInfo
+
+    db = Database(":memory:")
+    paris = ZoneInfo("Europe/Paris")
+    assert db.get_timezone(paris) == paris  # default from the TIMEZONE variable
+    db.set_timezone(ZoneInfo("America/Montreal"))
+    assert db.get_timezone(paris).key == "America/Montreal"
+
+    assert db.get_quiet_hours() is None
+    db.set_quiet_hours((time(22, 0), time(7, 0)))
+    assert db.get_quiet_hours() == (time(22, 0), time(7, 0))
+    db.set_quiet_hours(None)
+    assert db.get_quiet_hours() is None
+
+    db.record_usage("claude", "claude-haiku-4-5", input_tokens=4000, output_tokens=100)
+    db.record_usage("claude", "claude-haiku-4-5", input_tokens=3000, output_tokens=50)
+    db.record_usage("whisper", "whisper-1", seconds=12.5)
+    since = datetime.now(timezone.utc) - timedelta(days=1)
+    assert db.usage_since(since) == [
+        ("claude", "claude-haiku-4-5", 7000, 150, 0.0, 2),
+        ("whisper", "whisper-1", 0, 0, 12.5, 1),
+    ]
+    assert db.usage_since(datetime.now(timezone.utc) + timedelta(days=1)) == []
