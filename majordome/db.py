@@ -111,13 +111,14 @@ MIGRATIONS: list[str] = [
 ]
 
 OWNER_KEY = "owner_telegram_id"
-# Messages sent every day at a time the owner can change ("HH:MM" local time, or "off"),
-# with their default time.
-DAILY_MESSAGES = {"brief": time(8, 0), "checkin": time(21, 0)}
+# Messages sent at a time the owner can change ("HH:MM" local time, or "off"), with their
+# default time. The brief and check-in go out every day, the review on Sundays.
+DAILY_MESSAGES = {"brief": time(8, 0), "checkin": time(21, 0), "review": time(19, 0)}
 REMINDER_MINUTES_KEY = "reminder_minutes"  # how long before a timed item to remind; 0 = off
 DEFAULT_REMINDER_MINUTES = 30
 TIMEZONE_KEY = "timezone"  # e.g. "America/Montreal"; if unset, the TIMEZONE variable is used
 QUIET_HOURS_KEY = "quiet_hours"  # "22:00-07:00": no reminders in between; unset = off
+CALENDAR_URL_KEY = "calendar_url"  # secret iCal address of the owner's calendar
 LANGUAGE_KEY = "language"  # "fr" or "en": used for messages the bot sends on its own
 GENERATION_KEY = "generation"  # goes up by one at each reset (see wipe_history)
 
@@ -288,6 +289,12 @@ class Database:
     def set_quiet_hours(self, hours: tuple[time, time] | None) -> None:
         self.set_setting(QUIET_HOURS_KEY, f"{hours[0]:%H:%M}-{hours[1]:%H:%M}" if hours else "off")
 
+    def get_calendar_url(self) -> str | None:
+        return self.get_setting(CALENDAR_URL_KEY) or None
+
+    def set_calendar_url(self, url: str | None) -> None:
+        self.set_setting(CALENDAR_URL_KEY, url or "")
+
     def get_language(self) -> str:
         return self.get_setting(LANGUAGE_KEY) or "en"
 
@@ -358,6 +365,14 @@ class Database:
                 ),
             )
         return self.get_task(task_id) if cursor.rowcount else None
+
+    def tasks_done_between(self, start: datetime, end: datetime) -> list[Task]:
+        """Tasks completed from `start` (included) to `end` (excluded)."""
+        rows = self.conn.execute(
+            "SELECT * FROM tasks WHERE done_at >= ? AND done_at < ? ORDER BY done_at",
+            (start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()),
+        ).fetchall()
+        return [Task.from_row(row) for row in rows]
 
     def timed_tasks_between(self, start: datetime, end: datetime) -> list[Task]:
         """Open tasks with a due time from `start` to `end` (both aware datetimes)."""
@@ -444,6 +459,11 @@ class Database:
                 (routine_id, day.isoformat(), utc_now().isoformat()),
             )
         return routine if cursor.rowcount else None
+
+    def routine_check_days(self, routine_id: int) -> set[date]:
+        """Every day this routine was done."""
+        rows = self.conn.execute("SELECT day FROM routine_checks WHERE routine_id = ?", (routine_id,)).fetchall()
+        return {date.fromisoformat(row["day"]) for row in rows}
 
     def is_routine_done(self, routine_id: int, day: date) -> bool:
         row = self.conn.execute(
