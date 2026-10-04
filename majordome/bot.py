@@ -15,10 +15,11 @@ from telegram.ext import (
     filters,
 )
 
-from .actions import execute, format_tasks
-from .brain import Brain, BrainError
+from .actions import execute, format_brief, format_tasks
+from .brain import Brain, BrainError, Reply, SetBriefTime
 from .config import Config
 from .db import Database
+from .scheduler import schedule_brief
 from .voice import MAX_SECONDS, Transcriber, VoiceError
 
 log = logging.getLogger(__name__)
@@ -61,6 +62,9 @@ async def owner_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db: Database = context.bot_data["db"]
+    db.set_language("fr" if is_french(update) else "en")
+    brief_time = db.get_brief_time()
     if is_french(update):
         text = (
             "Bonjour, je suis Majordome 🎩\n\n"
@@ -68,6 +72,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "ce que tu as fait (« j'ai pris mes compléments »), "
             "ou demande « qu'est-ce qu'il me reste aujourd'hui ? ». /today affiche ta liste."
         )
+        if brief_time:
+            text += f"\n\nChaque matin à {brief_time:%H:%M}, je t'envoie ta journée. Dis-moi si tu préfères une autre heure."
     else:
         text = (
             "Hello, I'm Majordome 🎩\n\n"
@@ -75,6 +81,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "what you've done (\"I took my supplements\"), "
             "or ask \"what's left today?\". /today shows your list."
         )
+        if brief_time:
+            text += f"\n\nEvery morning at {brief_time:%H:%M}, I'll send you your day. Tell me if you'd like another time."
     await update.effective_message.reply_text(text)
 
 
@@ -163,6 +171,13 @@ async def understand_and_reply(update: Update, context: ContextTypes.DEFAULT_TYP
     except BrainError as error:
         log.warning("Claude failed: %s", error)
         replies = [pick(update, BRAIN_ERRORS.get(error.kind, BRAIN_ERROR_DEFAULT))]
+    else:
+        # Remember the owner's language for messages the bot sends by itself (the brief).
+        languages = [action.language for action in actions if not isinstance(action, Reply)]
+        if languages:
+            db.set_language(languages[0])
+        if any(isinstance(action, SetBriefTime) for action in actions):
+            schedule_brief(context.application)
 
     if heard:
         replies.insert(0, f"🎙️ \"{text}\"")
@@ -205,6 +220,13 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(format_tasks(db, now, now.date(), now.date(), lang))
 
 
+async def brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/brief: show the morning brief now."""
+    db: Database = context.bot_data["db"]
+    lang = "fr" if is_french(update) else "en"
+    await update.effective_message.reply_text(format_brief(db, owner_now(context), lang))
+
+
 async def unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     texts = ("Je comprends les messages texte et vocaux.", "I understand text and voice messages.")
     await update.effective_message.reply_text(pick(update, texts))
@@ -237,8 +259,10 @@ def build_application(config: Config, db: Database) -> Application:
     app.add_handler(TypeHandler(Update, owner_lock), group=-1)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("today", today))
+    app.add_handler(CommandHandler("brief", brief))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(~filters.COMMAND, unsupported))
     app.add_error_handler(on_error)
+    schedule_brief(app)
     return app
