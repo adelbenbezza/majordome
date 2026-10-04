@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from majordome.brain import AddRoutine, AddTasks, ListRoutines, RemoveRoutines, UpdateRoutine, BrainError, CompleteTasks, ListTasks, NewTask, Reply, SetBriefTime, parse_response
+from majordome.brain import AddRoutine, AddTasks, ListRoutines, RemoveRoutines, UpdateRoutine, BrainError, CompleteTasks, ListTasks, NewTask, Reply, RescheduleTasks, SetDailyTime, SetReminders, parse_response
 
 
 def answer(*blocks, stop_reason="tool_use"):
@@ -80,12 +80,18 @@ def test_unusable_answers(message):
         parse_response(message)
 
 
-def test_set_brief_time():
-    assert parse_response(answer(tool("set_brief_time", {"time": "07:30", "language": "fr"}))) == [
-        SetBriefTime(time(7, 30), "fr")
-    ]
-    assert parse_response(answer(tool("set_brief_time", {"time": None, "language": "en"}))) == [
-        SetBriefTime(None, "en")
+def test_settings_and_reschedule_tools():
+    message = answer(
+        tool("set_daily_time", {"message": "brief", "time": "07:30", "language": "fr"}),
+        tool("set_daily_time", {"message": "checkin", "time": None, "language": "fr"}),
+        tool("set_reminders", {"minutes_before": 15, "language": "en"}),
+        tool("reschedule_tasks", {"task_ids": [4], "due_date": "2026-10-09", "due_time": None, "language": "en"}),
+    )
+    assert parse_response(message) == [
+        SetDailyTime("brief", time(7, 30), "fr"),
+        SetDailyTime("checkin", None, "fr"),
+        SetReminders(15, "en"),
+        RescheduleTasks([4], date(2026, 10, 9), None, "en"),
     ]
 
 

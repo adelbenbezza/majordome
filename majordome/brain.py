@@ -163,16 +163,47 @@ TOOLS = [
         },
     },
     {
-        "name": "set_brief_time",
-        "description": "Change the time of the daily morning brief, or turn it off.",
+        "name": "set_daily_time",
+        "description": "Change the time of a daily message (morning brief or evening check-in), or turn it off.",
         "strict": True,
         "input_schema": {
             "type": "object",
             "properties": {
-                "time": {**NULLABLE_STRING, "description": "New time as HH:MM (24h), or null to turn the brief off."},
+                "message": {"type": "string", "enum": ["brief", "checkin"]},
+                "time": {**NULLABLE_STRING, "description": "New time as HH:MM (24h), or null to turn it off."},
                 "language": LANGUAGE,
             },
-            "required": ["time", "language"],
+            "required": ["message", "time", "language"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "set_reminders",
+        "description": "Change how long before a timed task or routine the reminder comes, or turn reminders off.",
+        "strict": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "minutes_before": {"type": "integer", "description": "Minutes before; 0 turns reminders off."},
+                "language": LANGUAGE,
+            },
+            "required": ["minutes_before", "language"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "reschedule_tasks",
+        "description": "Move open tasks to another day and/or time.",
+        "strict": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_ids": {"type": "array", "items": {"type": "integer"}, "description": "Numbers from the open task list."},
+                "due_date": {"type": "string", "description": "New day as YYYY-MM-DD."},
+                "due_time": {**NULLABLE_STRING, "description": "New time as HH:MM (24h), or null to keep the current time."},
+                "language": LANGUAGE,
+            },
+            "required": ["task_ids", "due_date", "due_time", "language"],
             "additionalProperties": False,
         },
     },
@@ -185,7 +216,9 @@ SYSTEM_PROMPT = """You are Majordome, a personal assistant in Telegram. The user
 - add_routine: something that repeats every week ("gym every Monday and Tuesday at 6pm", "supplements every day", "tous les mardis"). Never add a repeating thing as tasks.
 - update_routine: change an existing routine's days, time or title (keep whatever they didn't mention).
 - remove_routines / list_routines: they want to stop a routine, or see their routines.
-- set_brief_time: they want the morning brief (their daily task list) at another time, or not at all.
+- reschedule_tasks: move existing tasks to another day or time ("move the bank to Friday").
+- set_daily_time: they want the morning brief (their day's list) or the evening check-in (what's left, in the evening) at another time, or not at all.
+- set_reminders: they want reminders earlier or later before timed things, or none.
 - list_tasks: they ask what they have to do on a day or over a period ("what's left today?", "tomorrow?", "this week?").
 
 If no tool fits, a completion matches no open task, or the request is too unclear, call no tool and reply in one or two short sentences, in the user's language."""
@@ -247,8 +280,23 @@ class ListTasks:
 
 
 @dataclass(frozen=True)
-class SetBriefTime:
-    time: time | None  # None = brief turned off
+class SetDailyTime:
+    message: str  # "brief" or "checkin"
+    time: time | None  # None = turned off
+    language: str
+
+
+@dataclass(frozen=True)
+class SetReminders:
+    minutes_before: int  # 0 = off
+    language: str
+
+
+@dataclass(frozen=True)
+class RescheduleTasks:
+    task_ids: list[int]
+    due_date: date
+    due_time: time | None  # None = keep the current time
     language: str
 
 
@@ -259,7 +307,7 @@ class Reply:
     text: str
 
 
-Action = AddTasks | CompleteTasks | ListTasks | AddRoutine | UpdateRoutine | RemoveRoutines | ListRoutines | SetBriefTime | Reply
+Action = AddTasks | CompleteTasks | ListTasks | AddRoutine | UpdateRoutine | RemoveRoutines | ListRoutines | RescheduleTasks | SetDailyTime | SetReminders | Reply
 
 
 class BrainError(Exception):
@@ -331,8 +379,22 @@ def parse_tool_call(name: str, data: dict) -> Action:
         if not start or not end:
             raise BrainError("bad_answer", "list_tasks without dates")
         return ListTasks(start=min(start, end), end=max(start, end), language=_language(data))
-    if name == "set_brief_time":
-        return SetBriefTime(time=_parse_time(data.get("time")), language=_language(data))
+    if name == "set_daily_time":
+        if data.get("message") not in ("brief", "checkin"):
+            raise BrainError("bad_answer", "set_daily_time with unknown message")
+        return SetDailyTime(message=data["message"], time=_parse_time(data.get("time")), language=_language(data))
+    if name == "set_reminders":
+        return SetReminders(minutes_before=max(0, int(data["minutes_before"])), language=_language(data))
+    if name == "reschedule_tasks":
+        due_date = _parse_date(data.get("due_date"))
+        if due_date is None:
+            raise BrainError("bad_answer", "reschedule_tasks without a day")
+        return RescheduleTasks(
+            task_ids=[int(i) for i in data.get("task_ids", [])],
+            due_date=due_date,
+            due_time=_parse_time(data.get("due_time")),
+            language=_language(data),
+        )
     raise BrainError("bad_answer", f"unknown tool {name!r}")
 
 
