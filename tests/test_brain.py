@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from majordome.brain import AddTasks, BrainError, CompleteTasks, ListToday, NewTask, Reply, parse_response
+from majordome.brain import AddTasks, BrainError, CompleteTasks, ListTasks, NewTask, Reply, parse_response
 
 
 def answer(*blocks, stop_reason="tool_use"):
@@ -44,9 +44,14 @@ def test_add_tasks_with_date_and_time():
 def test_several_tool_calls():
     message = answer(
         tool("complete_tasks", {"task_ids": [3], "language": "en"}),
-        tool("list_today", {"language": "en"}),
+        tool("list_tasks", {"from_date": "2026-10-05", "to_date": "2026-10-05", "language": "en"}),
     )
-    assert parse_response(message) == [CompleteTasks([3], "en"), ListToday("en")]
+    assert parse_response(message) == [CompleteTasks([3], "en"), ListTasks(date(2026, 10, 5), date(2026, 10, 5), "en")]
+
+
+def test_list_tasks_dates_in_wrong_order_are_swapped():
+    message = answer(tool("list_tasks", {"from_date": "2026-10-11", "to_date": "2026-10-05", "language": "fr"}))
+    assert parse_response(message) == [ListTasks(date(2026, 10, 5), date(2026, 10, 11), "fr")]
 
 
 def test_text_only_is_a_reply():
@@ -67,7 +72,8 @@ def test_invalid_add_tasks(data):
     answer(stop_reason="end_turn"),  # empty
     answer(tool("delete_everything", {}), stop_reason="tool_use"),  # unknown tool
     answer(text("..."), stop_reason="refusal"),
-    answer(tool("list_today", {"language": "en"}), stop_reason="max_tokens"),  # cut off
+    answer(tool("list_tasks", {"from_date": "2026-10-05", "to_date": "x", "language": "en"})),  # bad date
+    answer(tool("list_tasks", {"from_date": "2026-10-05", "to_date": "2026-10-05", "language": "en"}), stop_reason="max_tokens"),  # cut off
 ])
 def test_unusable_answers(message):
     with pytest.raises(BrainError):

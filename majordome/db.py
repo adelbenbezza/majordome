@@ -163,3 +163,12 @@ class Database:
             (today.isoformat(),),
         ).fetchall()
         return [Task.from_row(row) for row in rows]
+
+    def tasks_between(self, start: date, end: date) -> list[Task]:
+        """Undone tasks due from `start` to `end` (both included)."""
+        rows = self.conn.execute(
+            "SELECT * FROM tasks WHERE done_at IS NULL AND due_date BETWEEN ? AND ? "
+            "ORDER BY due_date, due_at IS NULL, due_at, id",
+            (start.isoformat(), end.isoformat()),
+        ).fetchall()
+        return [Task.from_row(row) for row in rows]

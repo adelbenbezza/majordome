@@ -15,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 
-from .actions import execute, format_today
+from .actions import execute, format_tasks
 from .brain import Brain, BrainError
 from .config import Config
 from .db import Database
@@ -129,7 +129,8 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/today: same as asking "what's left today?", without calling Claude."""
     db: Database = context.bot_data["db"]
     lang = "fr" if is_french(update) else "en"
-    await update.effective_message.reply_text(format_today(db, owner_now(context), lang))
+    now = owner_now(context)
+    await update.effective_message.reply_text(format_tasks(db, now, now.date(), now.date(), lang))
 
 
 async def unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

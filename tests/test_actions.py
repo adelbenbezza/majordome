@@ -1,12 +1,18 @@
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from majordome.actions import execute
-from majordome.brain import AddTasks, CompleteTasks, ListToday, NewTask, Reply
+from majordome.brain import AddTasks, CompleteTasks, ListTasks, NewTask, Reply
 from majordome.db import Database
 
 PARIS = ZoneInfo("Europe/Paris")
 NOW = datetime(2026, 10, 4, 16, 20, tzinfo=PARIS)  # a Sunday
+TODAY = NOW.date()
+TOMORROW = TODAY + timedelta(days=1)
+
+
+def list_tasks(start, end, lang="en"):
+    return ListTasks(start, end, lang)
 
 
 def test_add_task_stores_time_in_utc():
@@ -33,10 +39,30 @@ def test_complete_and_list_today():
 
     assert execute(CompleteTasks([supplements.id], "en"), db, NOW) == "✅ Done:\n• Supplements"
     assert execute(CompleteTasks([supplements.id], "en"), db, NOW) == "I couldn't find that task in your list."
-    assert execute(ListToday("fr"), db, NOW) == "📋 Il te reste :\n• Late (ven. 2 oct.)\n• Gym (18:00)"
+    assert execute(list_tasks(TODAY, TODAY, "fr"), db, NOW) == "📋 Il te reste :\n• Late (ven. 2 oct.)\n• Gym (18:00)"
 
 
 def test_nothing_left_and_reply():
     db = Database(":memory:")
-    assert execute(ListToday("en"), db, NOW) == "🎉 Nothing left for today!"
+    assert execute(list_tasks(TODAY, TODAY), db, NOW) == "🎉 Nothing left for today!"
+    assert execute(list_tasks(TOMORROW, TOMORROW, "fr"), db, NOW) == "Rien de prévu pour demain."
     assert execute(Reply("Salut !"), db, NOW) == "Salut !"
+
+
+def test_list_tomorrow_and_week():
+    db = Database(":memory:")
+    db.add_task("Undated")
+    db.add_task("Milk", due_date=TOMORROW)
+    db.add_task("Gym", due_date=TOMORROW, due_at=datetime(2026, 10, 5, 19, 0, tzinfo=PARIS))
+    db.add_task("Bank", due_date=date(2026, 10, 9), due_at=datetime(2026, 10, 9, 15, 0, tzinfo=PARIS))
+    db.add_task("Next month", due_date=date(2026, 11, 2))
+
+    # A single future day: only that day's tasks, timed ones first.
+    assert execute(list_tasks(TOMORROW, TOMORROW), db, NOW) == "📋 Tomorrow:\n• Gym (19:00)\n• Milk"
+
+    # A week including today: today gets the undated task, then one section per day.
+    assert execute(list_tasks(TODAY, date(2026, 10, 10), "fr"), db, NOW) == (
+        "📋 Aujourd'hui :\n• Undated\n\n"
+        "📋 Demain :\n• Gym (19:00)\n• Milk\n\n"
+        "📋 Ven. 9 oct. :\n• Bank (15:00)"
+    )

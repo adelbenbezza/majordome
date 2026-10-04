@@ -79,13 +79,17 @@ TOOLS = [
         },
     },
     {
-        "name": "list_today",
-        "description": "Show what's left to do today.",
+        "name": "list_tasks",
+        "description": "Show the tasks for a day or a period (today, tomorrow, Friday, this week...).",
         "strict": True,
         "input_schema": {
             "type": "object",
-            "properties": {"language": LANGUAGE},
-            "required": ["language"],
+            "properties": {
+                "from_date": {"type": "string", "description": "First day, YYYY-MM-DD."},
+                "to_date": {"type": "string", "description": "Last day, YYYY-MM-DD. Same as from_date for a single day."},
+                "language": LANGUAGE,
+            },
+            "required": ["from_date", "to_date", "language"],
             "additionalProperties": False,
         },
     },
@@ -95,7 +99,7 @@ SYSTEM_PROMPT = """You are Majordome, a personal assistant in Telegram. The user
 
 - add_tasks: they want to do or remember something. Resolve dates and times relative to the current date and time given with the message. If no day is mentioned, due_date is null, except when a time is given: then use today, or tomorrow if that time has already passed.
 - complete_tasks: they say they did something. Match it by meaning to the open tasks listed with the message, and only use ids from that list.
-- list_today: they ask what's left or what they have to do today.
+- list_tasks: they ask what they have to do on a day or over a period ("what's left today?", "tomorrow?", "this week?").
 
 If no tool fits, a completion matches no open task, or the request is too unclear, call no tool and reply in one or two short sentences, in the user's language."""
 
@@ -120,7 +124,9 @@ class CompleteTasks:
 
 
 @dataclass(frozen=True)
-class ListToday:
+class ListTasks:
+    start: date
+    end: date
     language: str
 
 
@@ -131,7 +137,7 @@ class Reply:
     text: str
 
 
-Action = AddTasks | CompleteTasks | ListToday | Reply
+Action = AddTasks | CompleteTasks | ListTasks | Reply
 
 
 class BrainError(Exception):
@@ -181,8 +187,11 @@ def parse_tool_call(name: str, data: dict) -> Action:
         return AddTasks(tasks=tasks, language=_language(data))
     if name == "complete_tasks":
         return CompleteTasks(task_ids=[int(i) for i in data.get("task_ids", [])], language=_language(data))
-    if name == "list_today":
-        return ListToday(language=_language(data))
+    if name == "list_tasks":
+        start, end = _parse_date(data.get("from_date")), _parse_date(data.get("to_date"))
+        if not start or not end:
+            raise BrainError("bad_answer", "list_tasks without dates")
+        return ListTasks(start=min(start, end), end=max(start, end), language=_language(data))
     raise BrainError("bad_answer", f"unknown tool {name!r}")
 
 
