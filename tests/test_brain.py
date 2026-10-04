@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from majordome.brain import AddSomeday, AddToList, CheckListItems, ClearList, CloseSomeday, NewSomeday, PromoteSomeday, Show, Snapshot, build_context, AddRoutine, AddTasks, RemoveRoutines, UpdateRoutine, BrainError, CompleteTasks, ListTasks, NewTask, Reply, RescheduleTasks, UpdateSetting, parse_response
+from majordome.brain import DeleteTasks, RenameTask, Undo, AddSomeday, AddToList, CheckListItems, ClearList, CloseSomeday, NewSomeday, PromoteSomeday, Show, Snapshot, build_context, AddRoutine, AddTasks, RemoveRoutines, UpdateRoutine, BrainError, CompleteTasks, ListTasks, NewTask, Reply, RescheduleTasks, UpdateSetting, parse_response
 
 
 def answer(*blocks, stop_reason="tool_use"):
@@ -197,3 +197,20 @@ def test_malformed_tool_input_is_a_brain_error():
     ]:
         with pytest.raises(BrainError):
             parse_response(answer(tool(name, data)))
+
+
+def test_delete_rename_undo_tools():
+    message = answer(
+        tool("delete_tasks", {"task_ids": [3], "language": "fr"}),
+        tool("rename_task", {"task_id": 4, "title": "Appeler la banque", "language": "fr"}),
+        tool("undo", {"language": "en"}),
+    )
+    assert parse_response(message) == [DeleteTasks([3], "fr"), RenameTask(4, "Appeler la banque", "fr"), Undo("en")]
+
+
+def test_a_reply_imitating_a_confirmation_is_refused():
+    # Claude answered in words, imitating an earlier confirmation, without calling a tool.
+    with pytest.raises(BrainError) as error:
+        parse_response(answer(text("↩️ Annulé :\n📝 Supprimé : • Appeler Paul"), stop_reason="end_turn"))
+    assert error.value.kind == "fake_confirmation"
+    assert parse_response(answer(text("Bonjour ! 🙂"), stop_reason="end_turn")) == [Reply("Bonjour ! 🙂")]

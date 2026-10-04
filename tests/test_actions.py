@@ -2,7 +2,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from majordome.actions import execute, format_brief, format_checkin, format_settings, format_usage, move_to_tomorrow
-from majordome.brain import AddSomeday, AddToList, CheckListItems, ClearList, CloseSomeday, NewSomeday, PromoteSomeday, Show, AddRoutine, AddTasks, RemoveRoutines, UpdateRoutine, CompleteTasks, ListTasks, NewTask, Reply, RescheduleTasks, UpdateSetting
+from majordome.brain import DeleteTasks, RenameTask, Undo, AddSomeday, AddToList, CheckListItems, ClearList, CloseSomeday, NewSomeday, PromoteSomeday, Show, AddRoutine, AddTasks, RemoveRoutines, UpdateRoutine, CompleteTasks, ListTasks, NewTask, Reply, RescheduleTasks, UpdateSetting
 from majordome.db import Database
 
 PARIS = ZoneInfo("Europe/Paris")
@@ -279,3 +279,20 @@ def test_ticking_off_a_routine_shows_the_streak():
     db.check_routine(pills.id, TODAY - timedelta(days=2))
     assert execute(CompleteTasks([], "fr", routine_ids=[pills.id]), db, NOW) == "✅ Fait :\n• Supplements 🔥 3 d'affilée"
     assert execute(Show("routines", None, "en"), db, NOW) == "🔁 Your routines:\n• Supplements — every day 🔥 3 in a row"
+
+
+def test_delete_rename_and_undo():
+    db = Database(":memory:")
+    with db.undo_step() as step:
+        step.label = execute(AddTasks([NewTask("Appeler Blanche", TOMORROW, None)], "fr"), db, NOW)
+    task = db.open_tasks()[0]
+    with db.undo_step() as step:
+        step.label = execute(RenameTask(task.id, "Appeler la banque", "fr"), db, NOW)
+    assert step.label == "✏️ Renommé : Appeler la banque (demain)"
+    with db.undo_step():
+        assert execute(Undo("fr"), db, NOW) == "↩️ Annulé :\n✏️ Renommé : Appeler la banque (demain)"
+    assert db.get_task(task.id).title == "Appeler Blanche"
+    assert execute(DeleteTasks([task.id], "en"), db, NOW) == "🗑️ Deleted:\n• Appeler Blanche"
+    assert execute(DeleteTasks([task.id], "en"), db, NOW) == "I couldn't find that task in your list."
+    assert execute(Undo("en"), db, NOW).startswith("↩️ Undone:\n📝 Ajouté :")  # the add itself
+    assert execute(Undo("en"), db, NOW) == "There's nothing to undo."

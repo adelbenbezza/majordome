@@ -17,12 +17,15 @@ from .brain import (
     CheckListItems,
     ClearList,
     CloseSomeday,
+    DeleteTasks,
     ListTasks,
     PromoteSomeday,
     RemoveRoutines,
+    RenameTask,
     Reply,
     RescheduleTasks,
     Show,
+    Undo,
     UpdateRoutine,
     UpdateSetting,
 )
@@ -87,6 +90,10 @@ TEXT = {
         "checked": "✅ Coché :",
         "item_not_found": "Je n'ai pas trouvé ça dans tes listes.",
         "cleared": "🧹 Liste « {list} » vidée.",
+        "deleted": "🗑️ Supprimé :",
+        "renamed": "✏️ Renommé : {title}",
+        "undone": "↩️ Annulé :",
+        "nothing_to_undo": "Il n'y a rien à annuler.",
         "timezone_set": "🌍 C'est noté : fuseau horaire {tz} (il y est {time}).",
         "quiet_set": "🌙 Heures calmes : pas de rappels entre {start} et {end}.",
         "quiet_off": "🔔 Heures calmes désactivées.",
@@ -176,6 +183,10 @@ TEXT = {
         "checked": "✅ Ticked off:",
         "item_not_found": "I couldn't find that in your lists.",
         "cleared": "🧹 \"{list}\" list emptied.",
+        "deleted": "🗑️ Deleted:",
+        "renamed": "✏️ Renamed: {title}",
+        "undone": "↩️ Undone:",
+        "nothing_to_undo": "There's nothing to undo.",
         "timezone_set": "🌍 Got it: timezone {tz} (it's {time} there).",
         "quiet_set": "🌙 Quiet hours: no reminders between {start} and {end}.",
         "quiet_off": "🔔 Quiet hours turned off.",
@@ -350,6 +361,19 @@ def execute(action: Action, db: Database, now: datetime) -> str:
         if not removed:
             return t["routine_not_found"]
         return "\n".join([t["routine_removed"], *(f"• {r.title}" for r in removed)])
+
+    if isinstance(action, DeleteTasks):
+        deleted = [task for task in (db.delete_task(i) for i in action.task_ids) if task]
+        if not deleted:
+            return t["not_found"]
+        return "\n".join([t["deleted"], *(f"• {task.title}" for task in deleted)])
+
+    if isinstance(action, RenameTask):
+        task = db.rename_task(action.task_id, action.title)
+        return t["renamed"].format(title=format_task(task, now, lang)) if task else t["not_found"]
+
+    if isinstance(action, Undo):
+        return format_undo(db.undo_last(), lang)
 
     if isinstance(action, Show):
         return format_show(db, action.what, action.name, lang, now)
@@ -622,3 +646,11 @@ def format_usage(db: Database, now: datetime, lang: str) -> str:
         return t["usage_none"]
     lines += ["", t["usage_total"].format(cost=f"${total:.2f}"), t["usage_note"]]
     return "\n".join(lines)
+
+
+def format_undo(label: str | None, lang: str) -> str:
+    """Reply to an undo: what was undone (the label is the reply that step had given)."""
+    t = TEXT[lang]
+    if label is None:
+        return t["nothing_to_undo"]
+    return f"{t['undone']}\n{label}" if label else t["undone"].rstrip(" :")

@@ -147,6 +147,43 @@ TOOLS = [
         },
     },
     {
+        "name": "delete_tasks",
+        "description": "Delete tasks completely (added by mistake, no longer relevant). Not for tasks they did: use complete_tasks.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_ids": {"type": "array", "items": {"type": "integer"}, "description": "Numbers from the open task list."},
+                "language": LANGUAGE,
+            },
+            "required": ["task_ids", "language"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "rename_task",
+        "description": "Change a task's title (e.g. a word was misheard).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer"},
+                "title": {"type": "string"},
+                "language": LANGUAGE,
+            },
+            "required": ["task_id", "title", "language"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "undo",
+        "description": "Undo the bot's last change (\"undo\", \"annule\", \"oops, not that\").",
+        "input_schema": {
+            "type": "object",
+            "properties": {"language": LANGUAGE},
+            "required": ["language"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "show",
         "description": "Show the user's routines, Someday list, or notes and lists.",
         "input_schema": {
@@ -315,11 +352,14 @@ SYSTEM_PROMPT = """You are Majordome, a personal assistant in Telegram. The user
 - add_someday: the Someday list (called « Un jour » in French) holds wishes with no date or deadline ("I'd like to learn guitar one day", "livre à lire : Dune"). close_someday when one is achieved or dropped, promote_someday to plan it on a day.
 - add_to_list: shopping items, ideas, notes to keep ("note : ...", "add milk"). Notes and ideas go in a list such as "Notes" or "Idées". check_list_items when bought or done, clear_list to empty a list.
 - show: their routines (with their streaks: use it for any streak question), Someday list, or lists and notes.
+- delete_tasks / rename_task: remove a task added by mistake, or fix its title. undo: reverse the bot's last change ("annule", "undo that").
 - reschedule_tasks: move existing tasks to another day or time ("move the bank to Friday").
 - update_settings: morning brief time (their day's list), evening check-in time (what's left), Sunday weekly review time, how long before timed things to remind them, their timezone (where they live: "I'm in Montreal now"), quiet hours (no reminders at night). In French, « plus de brief / de rappels / d'heures calmes » means turning it off.
 - list_tasks: they ask what they have to do on a day or over a period ("what's left today?", "tomorrow?", "this week?").
 
-Earlier messages of the conversation may come first: use them to understand follow-ups ("yes", "the second one", "move it to Friday"), but only act on the last message.
+The recent conversation may come first, for context only: use it to understand follow-ups ("yes", "the second one", "move it to Friday"), but only act on the new <message>.
+
+Changes only happen through tools: never say you added, changed, deleted or undid something without calling the tool that does it. "Annule" / "undo" always means calling undo.
 
 If no tool fits, a completion matches no open task, or the request is too unclear, call no tool and reply in one or two short sentences, in the user's language."""
 
@@ -364,6 +404,24 @@ class UpdateRoutine:
 @dataclass(frozen=True)
 class RemoveRoutines:
     routine_ids: list[int]
+    language: str
+
+
+@dataclass(frozen=True)
+class DeleteTasks:
+    task_ids: list[int]
+    language: str
+
+
+@dataclass(frozen=True)
+class RenameTask:
+    task_id: int
+    title: str
+    language: str
+
+
+@dataclass(frozen=True)
+class Undo:
     language: str
 
 
@@ -451,7 +509,7 @@ class Reply:
     text: str
 
 
-Action = AddTasks | CompleteTasks | ListTasks | AddRoutine | UpdateRoutine | RemoveRoutines | Show | AddSomeday | CloseSomeday | PromoteSomeday | AddToList | CheckListItems | ClearList | RescheduleTasks | UpdateSetting | Reply
+Action = AddTasks | CompleteTasks | ListTasks | AddRoutine | UpdateRoutine | RemoveRoutines | DeleteTasks | RenameTask | Undo | Show | AddSomeday | CloseSomeday | PromoteSomeday | AddToList | CheckListItems | ClearList | RescheduleTasks | UpdateSetting | Reply
 
 
 class BrainError(Exception):
@@ -551,6 +609,15 @@ def _parse_tool_call(name: str, data: dict) -> Action:
         return UpdateRoutine(routine_id=int(data["routine_id"]), title=title, weekdays=weekdays, time=at, language=language)
     if name == "remove_routines":
         return RemoveRoutines(routine_ids=_ids(data.get("routine_ids", [])), language=_language(data))
+    if name == "delete_tasks":
+        return DeleteTasks(_ids(data.get("task_ids", [])), _language(data))
+    if name == "rename_task":
+        title = str(data["title"]).strip()
+        if not title:
+            raise BrainError("bad_answer", "rename_task without a title")
+        return RenameTask(int(data["task_id"]), title, _language(data))
+    if name == "undo":
+        return Undo(_language(data))
     if name == "show":
         if data.get("what") not in ("routines", "someday", "lists"):
             raise BrainError("bad_answer", "show with unknown what")
@@ -604,6 +671,12 @@ def _parse_tool_call(name: str, data: dict) -> Action:
     raise BrainError("bad_answer", f"unknown tool {name!r}")
 
 
+# Every confirmation the bot writes after a change starts with one of these (see actions.py).
+# If Claude answers in words but starts like a confirmation, it's imitating one from the
+# conversation without having changed anything: we must not pass that on.
+CONFIRMATION_MARKS = ("📝", "✅", "✓", "🗑", "↩", "✏", "🔁", "📅", "✨", "🎉", "➡", "🧹", "⏰", "🔕", "🔔", "🌍", "🌙", "☀", "🗓")
+
+
 def parse_response(message) -> list[Action]:
     """Turn Claude's whole answer into a list of Actions."""
     if message.stop_reason == "refusal":
@@ -617,6 +690,8 @@ def parse_response(message) -> list[Action]:
     text = " ".join(block.text for block in message.content if block.type == "text").strip()
     if not text:
         raise BrainError("bad_answer", "empty answer")
+    if text.startswith(CONFIRMATION_MARKS):
+        raise BrainError("fake_confirmation", text[:100])
     return [Reply(text)]
 
 
@@ -663,12 +738,16 @@ def build_context(text: str, now: datetime, snapshot: Snapshot) -> str:
 
 
 def build_messages(text: str, now: datetime, snapshot: Snapshot, history: list[tuple[str, str]]) -> list[dict]:
-    """Earlier exchanges as plain text, then the new message with the current state."""
-    messages = []
-    for user, bot in history:
-        messages += [{"role": "user", "content": user}, {"role": "assistant", "content": bot}]
-    messages.append({"role": "user", "content": build_context(text, now, snapshot)})
-    return messages
+    """One user message: the recent conversation as a transcript, then the state and new message.
+
+    The history is a labelled transcript rather than earlier assistant turns: given its
+    "own" past confirmations, Claude tended to imitate them in words instead of calling tools.
+    """
+    context = build_context(text, now, snapshot)
+    if history:
+        transcript = "\n".join(f"User: {user}\nBot: {bot}" for user, bot in history)
+        context = f"<recent_conversation>\n{transcript}\n</recent_conversation>\n{context}"
+    return [{"role": "user", "content": context}]
 
 
 class Brain:

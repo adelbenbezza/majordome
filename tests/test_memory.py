@@ -16,11 +16,13 @@ def test_keeps_the_last_exchanges_and_forgets_after_a_pause():
     assert conversation.recent(T0 + timedelta(hours=2)) == []  # went quiet: forgotten
 
 
-def test_history_comes_before_the_new_message():
+def test_history_comes_before_the_new_message_as_a_transcript():
     messages = build_messages("le premier", T0, Snapshot(), [("appelle Paul", "Paul Martin ou Paul Durand ?")])
-    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
-    assert messages[1]["content"] == "Paul Martin ou Paul Durand ?"
-    assert messages[2]["content"].endswith("<message>\nle premier\n</message>")
+    assert len(messages) == 1 and messages[0]["role"] == "user"
+    content = messages[0]["content"]
+    assert content.startswith("<recent_conversation>\nUser: appelle Paul\nBot: Paul Martin ou Paul Durand ?\n</recent_conversation>\n")
+    assert content.endswith("<message>\nle premier\n</message>")
+    assert build_messages("salut", T0, Snapshot(), [])[0]["content"].startswith("Now:")
 
 
 def test_command_menu_fits_telegram_rules():

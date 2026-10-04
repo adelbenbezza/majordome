@@ -26,6 +26,7 @@ from .actions import (
     format_settings,
     format_task,
     format_tasks,
+    format_undo,
     format_usage,
     move_to_tomorrow,
 )
@@ -132,6 +133,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )))
 
 
+async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/undo: reverse the last change (no AI needed)."""
+    db: Database = context.bot_data["db"]
+    lang = "fr" if is_french(update) else "en"
+    await update.effective_message.reply_text(format_undo(db.undo_last(), lang))
+
+
 async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     config: Config = context.bot_data["config"]
     db: Database = context.bot_data["db"]
@@ -162,6 +170,10 @@ BRAIN_ERRORS = {
     "refused": (
         "Je ne peux pas t'aider avec ça.",
         "I can't help with that one.",
+    ),
+    "fake_confirmation": (
+        "Hmm, je ne suis pas sûr d'avoir bien fait ça. Tu peux reformuler ? Pour annuler la dernière modification : /undo",
+        "Hmm, I'm not sure I did that right. Could you rephrase? To undo the last change: /undo",
     ),
     "no_credit": (
         "Ton compte Anthropic n'a plus de crédit. Recharge-le sur console.anthropic.com.",
@@ -243,7 +255,10 @@ async def understand_and_reply(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         conversation: Conversation = context.bot_data["conversation"]
         actions = await brain.interpret(text, now, take_snapshot(db, now), conversation.recent(now))
-        replies = [execute(action, db, now) for action in actions]
+        # Everything this message changes is one undo step, labelled with the reply.
+        with db.undo_step() as step:
+            replies = [execute(action, db, now) for action in actions]
+            step.label = "\n\n".join(replies)
     except BrainError as error:
         log.warning("Claude failed: %s", error)
         replies = [pick(update, BRAIN_ERRORS.get(error.kind, BRAIN_ERROR_DEFAULT))]
@@ -391,7 +406,9 @@ async def on_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.answer(pick(update, ("Cette liste date d'avant la remise à zéro.", "This list is from before the reset.")))
         await query.edit_message_reply_markup(None)
         return
-    title = tick(db, tap)
+    with db.undo_step() as step:
+        title = tick(db, tap)
+        step.label = f"✅ {title}"
     # answer() shows a short pop-up and stops the button's loading spinner.
     await query.answer(f"✅ {title}" if title else pick(update, ("Déjà fait 👍", "Already done 👍")))
 
@@ -433,8 +450,10 @@ async def on_move(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     day, _ = parsed
     now = owner_now(context)
-    moved = move_to_tomorrow(db, day, now)
     lang = db.get_language()
+    with db.undo_step() as step:
+        moved = move_to_tomorrow(db, day, now)
+        step.label = "\n".join([TEXT[lang]["moved"], *(f"• {task.title}" for task in moved)])
     await query.answer(pick(update, ("➡️ Reporté à demain", "➡️ Moved to tomorrow")))
     if not moved:
         await query.edit_message_reply_markup(None)
@@ -512,6 +531,7 @@ COMMANDS = [
     ("today", "What's left today, with ✅ buttons", "Ce qu'il te reste aujourd'hui, avec boutons ✅"),
     ("brief", "Your morning brief, now", "Ton brief du matin, tout de suite"),
     ("review", "This week's review", "Le bilan de la semaine"),
+    ("undo", "Undo the last change", "Annuler la dernière modification"),
     ("settings", "Your settings and how to change them", "Tes réglages et comment les changer"),
     ("calendar", "Show your calendar in the brief", "Afficher ton agenda dans le brief"),
     ("usage", "What the AI costs you this month", "Ce que l'IA te coûte ce mois-ci"),
@@ -548,6 +568,7 @@ def build_application(config: Config, db: Database) -> Application:
     app.add_handler(CommandHandler("today", today))
     app.add_handler(CommandHandler("brief", brief))
     app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CommandHandler("undo", undo))
     app.add_handler(CommandHandler("settings", settings))
     app.add_handler(CommandHandler("usage", usage))
     app.add_handler(CommandHandler("review", review))

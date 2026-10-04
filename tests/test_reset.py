@@ -79,3 +79,15 @@ def test_done_button_under_a_reminder_just_disappears():
     today = datetime.now(CONFIG.timezone).date()
     calls = tap(db, callback_data("task", task.id, today, db.get_generation(), "s"))
     assert calls == [("answer", "✅ Bank"), ("buttons", None)]
+
+
+def test_a_button_tap_can_be_undone():
+    from majordome.actions import format_undo
+
+    db = Database(":memory:")
+    task = db.add_task("Bank")
+    today = datetime.now(CONFIG.timezone).date()
+    tap(db, callback_data("task", task.id, today, db.get_generation(), "s"))
+    assert db.get_task(task.id).done_at is not None
+    assert format_undo(db.undo_last(), "en") == "↩️ Undone:\n✅ Bank"
+    assert db.get_task(task.id).done_at is None
