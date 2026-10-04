@@ -60,6 +60,7 @@ MIGRATIONS: list[str] = [
 OWNER_KEY = "owner_telegram_id"
 BRIEF_TIME_KEY = "brief_time"  # "HH:MM" in the owner's timezone, or "off"
 LANGUAGE_KEY = "language"  # "fr" or "en": used for messages the bot sends on its own
+GENERATION_KEY = "generation"  # goes up by one at each reset (see wipe_history)
 DEFAULT_BRIEF_TIME = time(8, 0)
 
 
@@ -186,6 +187,26 @@ class Database:
 
     def set_language(self, language: str) -> None:
         self.set_setting(LANGUAGE_KEY, language)
+
+    def get_generation(self) -> int:
+        return int(self.get_setting(GENERATION_KEY) or 0)
+
+    def wipe_history(self) -> None:
+        """Delete all tasks, routines and their history. The owner and settings are kept.
+
+        After this, SQLite starts numbering from 1 again, so a new task can get the
+        number of a deleted one. Bumping the generation lets ✅ buttons on older messages
+        tell they're out of date instead of ticking off the wrong thing.
+        """
+        with self.conn:
+            self.conn.execute("DELETE FROM routine_checks")
+            self.conn.execute("DELETE FROM routines")
+            self.conn.execute("DELETE FROM tasks")
+            self.conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, '1') "
+                "ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",
+                (GENERATION_KEY,),
+            )
 
     # --- tasks ------------------------------------------------------------
 

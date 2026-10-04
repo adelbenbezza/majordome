@@ -93,3 +93,24 @@ def test_routines():
     assert [r.title for r in db.active_routines()] == ["Supplements"]
     assert db.check_routine(gym.id, tuesday) is None  # removed routines can't be checked
     assert db.is_routine_done(gym.id, monday)  # history is kept
+
+
+def test_wipe_history_keeps_owner_and_settings():
+    from datetime import date, time
+
+    db = Database(":memory:")
+    db.claim_owner(42)
+    db.set_brief_time(time(7, 0))
+    db.set_language("fr")
+    routine = db.add_routine("Gym", [0], time(18, 0))
+    db.check_routine(routine.id, date(2026, 10, 5))
+    db.add_task("Bank")
+    assert db.get_generation() == 0
+
+    db.wipe_history()
+    assert db.open_tasks() == [] and db.active_routines() == []
+    assert db.conn.execute("SELECT COUNT(*) FROM routine_checks").fetchone()[0] == 0
+    assert db.get_owner_id() == 42 and db.get_brief_time() == time(7, 0) and db.get_language() == "fr"
+    assert db.get_generation() == 1
+    db.wipe_history()
+    assert db.get_generation() == 2
