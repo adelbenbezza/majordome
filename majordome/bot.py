@@ -18,12 +18,12 @@ from telegram.ext import (
     filters,
 )
 
-from .actions import execute, format_brief, format_tasks
-from .brain import Brain, BrainError, ListTasks, Reply, SetBriefTime
-from .buttons import parse_callback, tick, today_keyboard
+from .actions import TEXT, execute, format_brief, format_checkin, format_task, format_tasks, move_to_tomorrow
+from .brain import Brain, BrainError, ListTasks, Reply, SetDailyTime
+from .buttons import evening_keyboard, parse_callback, parse_move, tick, today_keyboard
 from .config import Config
 from .db import Database
-from .scheduler import schedule_brief
+from .scheduler import schedule_daily, start_clock
 from .voice import MAX_SECONDS, Transcriber, VoiceError
 
 log = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ async def owner_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db: Database = context.bot_data["db"]
     db.set_language("fr" if is_french(update) else "en")
-    brief_time = db.get_brief_time()
+    brief_time = db.get_daily_time("brief")
     if is_french(update):
         text = (
             "Bonjour, je suis Majordome 🎩\n\n"
@@ -79,6 +79,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         if brief_time:
             text += f"\n\nChaque matin à {brief_time:%H:%M}, je t'envoie ta journée. Dis-moi si tu préfères une autre heure."
+        text += "\n\nJe te rappelle les choses prévues à une heure précise, et le soir je fais le point avec toi."
     else:
         text = (
             "Hello, I'm Majordome 🎩\n\n"
@@ -89,6 +90,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         if brief_time:
             text += f"\n\nEvery morning at {brief_time:%H:%M}, I'll send you your day. Tell me if you'd like another time."
+        text += "\n\nI'll remind you of things planned at a set time, and check in with you in the evening."
     await update.effective_message.reply_text(text)
 
 
@@ -184,8 +186,8 @@ async def understand_and_reply(update: Update, context: ContextTypes.DEFAULT_TYP
         languages = [action.language for action in actions if not isinstance(action, Reply)]
         if languages:
             db.set_language(languages[0])
-        if any(isinstance(action, SetBriefTime) for action in actions):
-            schedule_brief(context.application)
+        if any(isinstance(action, SetDailyTime) for action in actions):
+            schedule_daily(context.application)
         # "What's left today?" gets ✅ buttons, like /today.
         if any(isinstance(a, ListTasks) and a.start == a.end == now.date() for a in actions):
             keyboard = today_keyboard(db, now, db.get_language())
@@ -258,19 +260,54 @@ async def on_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await query.answer(f"✅ {title}" if title else pick(update, ("Déjà fait 👍", "Already done 👍")))
 
     now = owner_now(context)
-    if tap.day == now.date():
-        # Today's list: rewrite it with what's left now (also picks up anything added since).
-        lang = db.get_language()
-        text = format_tasks(db, now, now.date(), now.date(), lang)
-        try:
-            await query.edit_message_text(text, reply_markup=today_keyboard(db, now, lang))
-        except BadRequest as error:
-            if "not modified" not in str(error).lower():  # same text twice is fine
-                raise
+    if tap.view == "s":
+        # A reminder: its only button has done its job.
+        await query.edit_message_reply_markup(None)
+    elif tap.day == now.date():
+        # Today's list or check-in: rewrite it with what's left now (also picks up anything added since).
+        await refresh(query, db, now, evening=tap.view == "e")
     else:
         # An older day's list: just remove the tapped button.
         rows = [row for row in query.message.reply_markup.inline_keyboard if row[0].callback_data != query.data]
         await query.edit_message_reply_markup(InlineKeyboardMarkup(rows) if rows else None)
+
+
+async def refresh(query, db: Database, now: datetime, evening: bool = False, prefix: str = "") -> None:
+    """Rewrite a today's list (or evening check-in) message with what's left now."""
+    lang = db.get_language()
+    if evening:
+        text, keyboard = format_checkin(db, now, lang), evening_keyboard(db, now, lang)
+    else:
+        text, keyboard = format_tasks(db, now, now.date(), now.date(), lang), today_keyboard(db, now, lang)
+    try:
+        await query.edit_message_text(prefix + text, reply_markup=keyboard)
+    except BadRequest as error:
+        if "not modified" not in str(error).lower():  # same text twice is fine
+            raise
+
+
+async def on_move(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """"Move all to tomorrow" under the evening check-in."""
+    query = update.callback_query
+    db: Database = context.bot_data["db"]
+    parsed = parse_move(query.data)
+    if parsed is None or parsed[1] != db.get_generation():
+        await query.answer()
+        await query.edit_message_reply_markup(None)
+        return
+    day, _ = parsed
+    now = owner_now(context)
+    moved = move_to_tomorrow(db, day, now)
+    lang = db.get_language()
+    await query.answer(pick(update, ("➡️ Reporté à demain", "➡️ Moved to tomorrow")))
+    if not moved:
+        await query.edit_message_reply_markup(None)
+        return
+    prefix = "\n".join([TEXT[lang]["moved"], *(f"• {format_task(task, now, lang)}" for task in moved)]) + "\n\n"
+    if day == now.date():
+        await refresh(query, db, now, evening=True, prefix=prefix)
+    else:
+        await query.edit_message_text(prefix.strip())
 
 
 RESET_SECONDS = 5 * 60  # how long the "Yes, delete everything" button works
@@ -350,9 +387,11 @@ def build_application(config: Config, db: Database) -> Application:
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CallbackQueryHandler(on_done, pattern="^done:"))
     app.add_handler(CallbackQueryHandler(on_reset, pattern="^reset:"))
+    app.add_handler(CallbackQueryHandler(on_move, pattern="^move:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(~filters.COMMAND, unsupported))
     app.add_error_handler(on_error)
-    schedule_brief(app)
+    schedule_daily(app)
+    start_clock(app)
     return app

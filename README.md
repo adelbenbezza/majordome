@@ -4,7 +4,7 @@ A personal assistant that lives in Telegram. Talk to it by voice or text, in Fre
 
 Un assistant personnel qui vit dans Telegram. Parle-lui à la voix ou par écrit, en français ou en anglais.
 
-> 🚧 **Work in progress / En construction** — for now the bot handles tasks by text or voice (add, complete, "what's left today?"), recurring routines, ✅ buttons to tick things off, and a morning brief. / Pour l'instant le bot gère les tâches à l'écrit ou à la voix (ajouter, cocher, « qu'est-ce qu'il me reste ? »), les routines, des boutons ✅ pour cocher, et envoie un brief chaque matin.
+> 🚧 **Work in progress / En construction** — for now the bot handles tasks by text or voice (add, complete, "what's left today?"), recurring routines, ✅ buttons to tick things off, a morning brief, reminders and an evening check-in. / Pour l'instant le bot gère les tâches à l'écrit ou à la voix (ajouter, cocher, « qu'est-ce qu'il me reste ? »), les routines, des boutons ✅ pour cocher, un brief le matin, des rappels et un point le soir.
 
 **[🇬🇧 English](#-english) · [🇫🇷 Français](#-français)**
 
@@ -49,7 +49,7 @@ Open your bot in Telegram (search for its username) and send `/start` **right aw
 - `/brief`: show the morning brief now
 - `/reset`: delete all tasks, routines and their history to start fresh (asks for confirmation; keeps your settings)
 
-Everything else, just say it: "call the bank on Friday at 3pm", "gym on Mondays at 6pm", "send my brief at 7:30".
+Everything else, just say it: "call the bank on Friday at 3pm", "gym on Mondays at 6pm", "send my brief at 7:30", "check in at 8:30pm", "remind me 15 minutes before".
 
 ### Something's wrong?
 - **The bot doesn't answer:** in Railway, open your service, then *Deployments* → *View logs*. A line starting with `ERROR` explains the problem in plain words (for example a missing or mistyped key). Fix it in the *Variables* tab; Railway restarts the bot automatically.
@@ -106,7 +106,7 @@ Ouvre ton bot dans Telegram (cherche son nom d'utilisateur) et envoie `/start` *
 - `/brief` : affiche le brief du matin tout de suite
 - `/reset` : supprime toutes les tâches, routines et leur historique pour repartir de zéro (demande confirmation ; garde tes réglages)
 
-Pour tout le reste, dis-le simplement : « appeler la banque vendredi à 15h », « salle de sport le lundi à 18h », « envoie le brief à 7h30 ».
+Pour tout le reste, dis-le simplement : « appeler la banque vendredi à 15h », « salle de sport le lundi à 18h », « envoie le brief à 7h30 », « fais le point à 20h30 », « rappelle-moi 15 minutes avant ».
 
 ### Ça ne marche pas ?
 - **Le bot ne répond pas :** dans Railway, ouvre ton service, puis *Deployments* → *View logs*. Une ligne qui commence par `ERROR` explique le problème (par exemple une clé manquante ou mal copiée). Corrige-la dans l'onglet *Variables* ; Railway redémarre le bot tout seul.
@@ -134,7 +134,7 @@ cp .env.example .env        # then fill in your keys (use a separate test bot!)
 .venv/bin/pytest
 ```
 
-Code lives in `majordome/`: `config.py` (environment variables), `db.py` (SQLite + migrations), `bot.py` (Telegram handlers and owner lock), `brain.py` (Claude reads the message and picks a tool), `actions.py` (Python carries out the tool call on the database), `voice.py` (Whisper transcription), `scheduler.py` (daily messages such as the morning brief, via JobQueue), `buttons.py` (✅ inline buttons). Railway runs `python -m majordome` (see `railway.json`) and redeploys on every push to `main`.
+Code lives in `majordome/`: `config.py` (environment variables), `db.py` (SQLite + migrations), `bot.py` (Telegram handlers and owner lock), `brain.py` (Claude reads the message and picks a tool), `actions.py` (Python carries out the tool call on the database), `voice.py` (Whisper transcription), `scheduler.py` (daily messages such as the morning brief, via JobQueue), `buttons.py` (✅ inline buttons), `reminders.py` (which reminders and follow-ups are due, checked every minute). Railway runs `python -m majordome` (see `railway.json`) and redeploys on every push to `main`.
 
 **Railway template (for the Deploy button):** create the service from this repo, attach a **volume** (any mount path; the database goes there automatically via `RAILWAY_VOLUME_MOUNT_PATH`), mark the three API keys as required variables, then publish it as a template and replace `REPLACE_ME` in the links above.
 

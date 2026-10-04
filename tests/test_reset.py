@@ -3,7 +3,7 @@ import time
 from datetime import datetime
 from types import SimpleNamespace
 
-from majordome.bot import on_done, on_reset
+from majordome.bot import on_done, on_move, on_reset
 from majordome.buttons import callback_data
 from majordome.config import load_config
 from majordome.db import Database
@@ -29,7 +29,7 @@ def tap(db, data):
     )
     update = SimpleNamespace(callback_query=query, effective_user=SimpleNamespace(language_code="en"))
     context = SimpleNamespace(bot_data={"config": CONFIG, "db": db})
-    handler = on_reset if data.startswith("reset:") else on_done
+    handler = {"reset": on_reset, "move": on_move}.get(data.split(":")[0], on_done)
     asyncio.run(handler(update, context))
     return calls
 
@@ -57,3 +57,25 @@ def test_confirmed_reset_wipes_and_old_buttons_stop_working():
     calls = tap(db, old_button)
     assert calls == [("answer", "This list is from before the reset."), ("buttons", None)]
     assert db.get_task(new_task.id).done_at is None  # ...but the old button didn't tick the new task
+
+
+def test_move_all_to_tomorrow_button():
+    from datetime import timedelta
+
+    from majordome.buttons import move_callback
+
+    db = Database(":memory:")
+    today = datetime.now(CONFIG.timezone).date()
+    db.add_task("Bank", due_date=today)
+    calls = tap(db, move_callback(today, db.get_generation()))
+    assert calls[0] == ("answer", "➡️ Moved to tomorrow")
+    assert calls[1][1].startswith("➡️ Moved to tomorrow:\n• Bank (tomorrow)")
+    assert db.open_tasks()[0].due_date == today + timedelta(days=1)
+
+
+def test_done_button_under_a_reminder_just_disappears():
+    db = Database(":memory:")
+    task = db.add_task("Bank")
+    today = datetime.now(CONFIG.timezone).date()
+    calls = tap(db, callback_data("task", task.id, today, db.get_generation(), "s"))
+    assert calls == [("answer", "✅ Bank"), ("buttons", None)]
