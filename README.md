@@ -53,7 +53,7 @@ Open your bot in Telegram (search for its username) and send `/start` **right aw
 - `/calendar`: show your Google Calendar events in the morning brief (see below)
 - `/reset`: delete all tasks, routines, Someday list, lists and notes to start fresh (asks for confirmation; keeps your settings)
 
-Everything else, just say it: "call the bank on Friday at 3pm", "gym on Mondays at 6pm", "send my brief at 7:30", "check in at 8:30pm", "remind me 15 minutes before", "one day I'd like to visit Japan", "add eggs to the shopping list".
+Everything else, just say it: "call the bank on Friday at 3pm", "gym on Mondays at 6pm", "send my brief at 7:30", "check in at 8:30pm", "remind me 15 minutes before", "one day I'd like to visit Japan", "add eggs to the shopping list", "pay rent on the 1st of every month", "cleaning every other Friday".
 
 ### Add your Google Calendar (optional)
 1. On a computer, open [Google Calendar](https://calendar.google.com), click ⚙️ > **Settings**, then your calendar in the left column.
@@ -121,7 +121,7 @@ Ouvre ton bot dans Telegram (cherche son nom d'utilisateur) et envoie `/start` *
 - `/calendar` : affiche ton agenda Google dans le brief du matin (voir plus bas)
 - `/reset` : supprime toutes les tâches, routines, la liste « Un jour », les listes et notes pour repartir de zéro (demande confirmation ; garde tes réglages)
 
-Pour tout le reste, dis-le simplement : « appeler la banque vendredi à 15h », « salle de sport le lundi à 18h », « envoie le brief à 7h30 », « fais le point à 20h30 », « rappelle-moi 15 minutes avant », « un jour j'aimerais aller au Japon », « ajoute des œufs à la liste de courses ».
+Pour tout le reste, dis-le simplement : « appeler la banque vendredi à 15h », « salle de sport le lundi à 18h », « envoie le brief à 7h30 », « fais le point à 20h30 », « rappelle-moi 15 minutes avant », « un jour j'aimerais aller au Japon », « ajoute des œufs à la liste de courses », « payer le loyer le 1er de chaque mois », « ménage un vendredi sur deux ».
 
 ### Ajouter ton agenda Google (facultatif)
 1. Sur un ordinateur, ouvre [Google Agenda](https://calendar.google.com), clique sur ⚙️ > **Paramètres**, puis sur ton agenda dans la colonne de gauche.

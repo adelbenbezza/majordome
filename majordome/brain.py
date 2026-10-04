@@ -27,6 +27,22 @@ NULLABLE_STRING = {"anyOf": [{"type": "string"}, {"type": "null"}]}
 
 WEEKDAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]  # index = date.weekday()
 
+# How a routine repeats (add_routine and update_routine).
+REPEAT_FIELDS = {
+    "unit": {"type": "string", "enum": ["week", "month"]},
+    "every": {"type": "integer", "description": "Every N weeks/months; 1 = every week/month."},
+    "weekdays": {
+        "type": "array",
+        "items": {"type": "string", "enum": WEEKDAY_NAMES},
+        "description": "unit week: the days (every day = all seven). unit month: empty.",
+    },
+    "month_day": {
+        "anyOf": [{"type": "integer"}, {"type": "null"}],
+        "description": "unit month: day of the month (31 = last day). unit week: null.",
+    },
+    "start_date": {**NULLABLE_STRING, "description": "YYYY-MM-DD if they said when it starts, else null (today)."},
+}
+
 TOOLS = [
     {
         "name": "add_tasks",
@@ -105,15 +121,11 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "title": {"type": "string", "description": "Short title in the user's language, without the days or time."},
-                "weekdays": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": WEEKDAY_NAMES},
-                    "description": "Days it happens on. Every day = all seven.",
-                },
+                **REPEAT_FIELDS,
                 "time": {**NULLABLE_STRING, "description": "Time as HH:MM (24h), or null if none was mentioned."},
                 "language": LANGUAGE,
             },
-            "required": ["title", "weekdays", "time", "language"],
+            "required": ["title", *REPEAT_FIELDS, "time", "language"],
             "additionalProperties": False,
         },
     },
@@ -125,11 +137,11 @@ TOOLS = [
             "properties": {
                 "routine_id": {"type": "integer", "description": "Number from the routine list (r3 -> 3)."},
                 "title": {"type": "string", "description": "Title, unchanged unless they asked to rename it."},
-                "weekdays": {"type": "array", "items": {"type": "string", "enum": WEEKDAY_NAMES}},
+                **REPEAT_FIELDS,
                 "time": {**NULLABLE_STRING, "description": "Time as HH:MM (24h), or null for no time."},
                 "language": LANGUAGE,
             },
-            "required": ["routine_id", "title", "weekdays", "time", "language"],
+            "required": ["routine_id", "title", *REPEAT_FIELDS, "time", "language"],
             "additionalProperties": False,
         },
     },
@@ -334,19 +346,16 @@ TOOLS = [
 
 # "strict" makes the API guarantee Claude's tool input matches the schema exactly. The API
 # compiles all strict schemas into one grammar with a size limit (16 strict tools was too
-# many), so only the most used and richest tools are strict. parse_tool_call checks
-# every tool's input anyway.
-STRICT_TOOLS = {
-    "add_tasks", "complete_tasks", "list_tasks", "reschedule_tasks",
-    "add_routine", "update_routine", "add_someday", "add_to_list",
-}
+# many, and 8 once routines got their repeat fields), so only the most used tools are
+# strict. parse_tool_call checks every tool's input anyway.
+STRICT_TOOLS = {"add_tasks", "complete_tasks", "list_tasks", "reschedule_tasks", "add_routine", "update_routine"}
 TOOLS = [{**tool, "strict": tool["name"] in STRICT_TOOLS} for tool in TOOLS]
 
 SYSTEM_PROMPT = """You are Majordome, a personal assistant in Telegram. The user writes in French or English, sometimes mixing both. Work out what they want and call the matching tool. One message can need several tool calls.
 
 - add_tasks: they want to do or remember something. Resolve dates and times relative to the current date and time given with the message. If no day is mentioned, due_date is null, except when a time is given: then use today, or tomorrow if that time has already passed.
 - complete_tasks: they say they did something. Match it by meaning to the open tasks and routines listed with the message, and only use numbers from those lists.
-- add_routine: something that repeats every week ("gym every Monday and Tuesday at 6pm", "supplements every day", "tous les mardis"). Never add a repeating thing as tasks.
+- add_routine: something that repeats ("gym every Monday and Tuesday at 6pm", "supplements every day", "tous les mardis", "cleaning every other Friday", "rent on the 1st of each month", "dentist every 6 months"). Never add a repeating thing as tasks.
 - update_routine: change an existing routine's days, time or title (keep whatever they didn't mention).
 - remove_routines: they want to stop a routine.
 - add_someday: the Someday list (called « Un jour » in French) holds wishes with no date or deadline ("I'd like to learn guitar one day", "livre à lire : Dune"). close_someday when one is achieved or dropped, promote_someday to plan it on a day.
@@ -390,6 +399,10 @@ class AddRoutine:
     weekdays: list[int]  # Monday = 0
     time: time | None
     language: str
+    unit: str = "week"
+    every: int = 1
+    month_day: int | None = None
+    start_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -399,6 +412,10 @@ class UpdateRoutine:
     weekdays: list[int]
     time: time | None
     language: str
+    unit: str = "week"
+    every: int = 1
+    month_day: int | None = None
+    start_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -538,6 +555,13 @@ def _parse_time(value: str | None) -> time | None:
         raise BrainError("bad_answer", f"invalid time {value!r}") from None
 
 
+def _list(value) -> list:
+    """A list from Claude. Refuses a bare string, which Python would read letter by letter."""
+    if not isinstance(value, list):
+        raise TypeError(f"expected a list, got {value!r}")
+    return value
+
+
 def _ids(value) -> list[int]:
     """A list of item numbers. Refuses a bare string, which would be read digit by digit."""
     if not isinstance(value, list):
@@ -600,13 +624,36 @@ def _parse_tool_call(name: str, data: dict) -> Action:
         )
     if name in ("add_routine", "update_routine"):
         title = str(data.get("title", "")).strip()
+        unit = data.get("unit") or "week"
+        every = max(1, int(data.get("every") or 1))
         weekdays = sorted({WEEKDAY_NAMES.index(d) for d in data.get("weekdays", []) if d in WEEKDAY_NAMES})
-        if not title or not weekdays:
-            raise BrainError("bad_answer", f"{name} without title or days")
-        at, language = _parse_time(data.get("time")), _language(data)
+        month_day = data.get("month_day")
+        if unit == "month":
+            weekdays = []
+            if month_day is None or not 1 <= int(month_day) <= 31:
+                raise BrainError("bad_answer", f"{name}: monthly without a valid day")
+            month_day = int(month_day)
+        elif unit == "week":
+            month_day = None
+            if not weekdays:
+                raise BrainError("bad_answer", f"{name}: weekly without days")
+        else:
+            raise BrainError("bad_answer", f"{name}: unknown unit {unit!r}")
+        if not title:
+            raise BrainError("bad_answer", f"{name} without a title")
+        fields = dict(
+            title=title,
+            weekdays=weekdays,
+            time=_parse_time(data.get("time")),
+            language=_language(data),
+            unit=unit,
+            every=every,
+            month_day=month_day,
+            start_date=_parse_date(data.get("start_date")),
+        )
         if name == "add_routine":
-            return AddRoutine(title=title, weekdays=weekdays, time=at, language=language)
-        return UpdateRoutine(routine_id=int(data["routine_id"]), title=title, weekdays=weekdays, time=at, language=language)
+            return AddRoutine(**fields)
+        return UpdateRoutine(routine_id=int(data["routine_id"]), **fields)
     if name == "remove_routines":
         return RemoveRoutines(routine_ids=_ids(data.get("routine_ids", [])), language=_language(data))
     if name == "delete_tasks":
@@ -625,7 +672,7 @@ def _parse_tool_call(name: str, data: dict) -> Action:
     if name == "add_someday":
         items = [
             NewSomeday(str(i["title"]).strip(), str(i.get("category") or "").strip() or "?")
-            for i in data.get("items", [])
+            for i in _list(data.get("items", []))
             if str(i.get("title", "")).strip()
         ]
         if not items:
@@ -640,7 +687,7 @@ def _parse_tool_call(name: str, data: dict) -> Action:
         return PromoteSomeday(int(data["someday_id"]), due_date, _parse_time(data.get("due_time")), _language(data))
     if name == "add_to_list":
         list_name = str(data.get("list", "")).strip()
-        items = [str(i).strip() for i in data.get("items", []) if str(i).strip()]
+        items = [str(i).strip() for i in _list(data.get("items", [])) if str(i).strip()]
         if not list_name or not items:
             raise BrainError("bad_answer", "add_to_list without list or items")
         return AddToList(list=list_name, items=items, language=_language(data))
@@ -709,6 +756,18 @@ class Snapshot:
     list_names: list[str] = field(default_factory=list)
 
 
+def describe_repeat(routine: Routine) -> str:
+    """The routine's schedule in plain English, for Claude ("every 2 weeks on fri")."""
+    since = f" from {routine.start_date}" if routine.start_date and routine.every > 1 else ""
+    if routine.unit == "month":
+        every = "every month" if routine.every == 1 else f"every {routine.every} months"
+        return f"day {routine.month_day} of {every}{since}"
+    if routine.daily:
+        return "every day"
+    days = ", ".join(WEEKDAY_NAMES[d] for d in routine.weekdays)
+    return days if routine.every == 1 else f"every {routine.every} weeks on {days}{since}"
+
+
 def build_context(text: str, now: datetime, snapshot: Snapshot) -> str:
     """The user turn: current time, the user's open things (to match by number), then the message."""
     lines = [f"Now: {now:%A %Y-%m-%d %H:%M} ({now.tzinfo})", "Open tasks:"]
@@ -719,7 +778,7 @@ def build_context(text: str, now: datetime, snapshot: Snapshot) -> str:
         lines.append("(none)")
     lines.append("Routines:")
     for routine, done_today in snapshot.routines:
-        days = "every day" if routine.daily else ", ".join(WEEKDAY_NAMES[d] for d in routine.weekdays)
+        days = describe_repeat(routine)
         at = f" at {routine.time:%H:%M}" if routine.time else ""
         status = "done today" if done_today else "not done today"
         lines.append(f"r{routine.id} {routine.title} ({days}{at}; {status})")

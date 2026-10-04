@@ -296,3 +296,35 @@ def test_delete_rename_and_undo():
     assert execute(DeleteTasks([task.id], "en"), db, NOW) == "I couldn't find that task in your list."
     assert execute(Undo("en"), db, NOW).startswith("↩️ Undone:\n📝 Ajouté :")  # the add itself
     assert execute(Undo("en"), db, NOW) == "There's nothing to undo."
+
+
+def test_repeat_wording():
+    db = Database(":memory:")
+    execute(AddRoutine("Ménage", [4], None, "fr", every=2), db, NOW)
+    execute(AddRoutine("Loyer", [], None, "fr", unit="month", month_day=1), db, NOW)
+    execute(AddRoutine("Budget", [], time(20, 0), "en", unit="month", month_day=31), db, NOW)
+    execute(AddRoutine("Dentist", [], None, "en", unit="month", every=6, month_day=22), db, NOW)
+    assert execute(Show("routines", None, "fr"), db, NOW).splitlines()[1:] == [
+        "• Budget — le dernier jour de chaque mois à 20:00",
+        "• Ménage — toutes les 2 semaines, ven.",
+        "• Loyer — le 1er de chaque mois",
+        "• Dentist — tous les 6 mois, le 22",
+    ]
+    assert execute(Show("routines", None, "en"), db, NOW).splitlines()[1:] == [
+        "• Budget — on the last day of every month at 20:00",
+        "• Ménage — every 2 weeks, Fri",
+        "• Loyer — on the 1st of every month",
+        "• Dentist — every 6 months on the 22nd",
+    ]
+    # Counting starts today (Sunday 4 Oct): the cleaning is on Fri 9 Oct, then two weeks later.
+    cleaning = db.active_routines()[1]
+    assert cleaning.start_date == TODAY
+    assert [cleaning.happens_on(date(2026, 10, d)) for d in (9, 16, 23)] == [True, False, True]
+
+
+def test_updating_a_routine_keeps_its_start_date():
+    db = Database(":memory:")
+    next_friday = date(2026, 10, 9)
+    execute(AddRoutine("Ménage", [4], None, "fr", every=2, start_date=next_friday), db, NOW)
+    execute(UpdateRoutine(1, "Ménage", [5], None, "fr", every=2), db, NOW)  # Saturday instead
+    assert db.get_routine(1).start_date == next_friday

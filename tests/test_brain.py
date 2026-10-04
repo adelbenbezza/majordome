@@ -185,8 +185,9 @@ def test_context_lists_everything_with_numbers():
 def test_strict_tools_stay_under_the_api_limit():
     from majordome.brain import TOOLS
 
-    # The API rejected 16 strict tools ("compiled grammar is too large"); 10 worked.
-    assert sum(tool["strict"] for tool in TOOLS) <= 8
+    # The API rejects too many strict tools ("compiled grammar is too large"): 16 failed,
+    # then 8 failed once routines got their repeat fields. 6 works (checked live).
+    assert sum(tool["strict"] for tool in TOOLS) <= 6
 
 
 def test_malformed_tool_input_is_a_brain_error():
@@ -194,6 +195,8 @@ def test_malformed_tool_input_is_a_brain_error():
         ("update_routine", {"title": "Gym", "weekdays": ["mon"], "time": None, "language": "en"}),  # no routine_id
         ("set_reminders", {"minutes_before": "soon", "language": "en"}),
         ("close_someday", {"someday_ids": "4", "done": True, "language": "en"}),
+        ("add_to_list", {"list": "Courses", "items": "lait", "language": "fr"}),
+        ("add_someday", {"items": "Dune", "language": "fr"}),
     ]:
         with pytest.raises(BrainError):
             parse_response(answer(tool(name, data)))
@@ -214,3 +217,20 @@ def test_a_reply_imitating_a_confirmation_is_refused():
         parse_response(answer(text("↩️ Annulé :\n📝 Supprimé : • Appeler Paul"), stop_reason="end_turn"))
     assert error.value.kind == "fake_confirmation"
     assert parse_response(answer(text("Bonjour ! 🙂"), stop_reason="end_turn")) == [Reply("Bonjour ! 🙂")]
+
+
+def test_routine_repeat_fields():
+    def routine(**fields):
+        base = {"title": "Loyer", "unit": "week", "every": 1, "weekdays": [], "month_day": None,
+                "start_date": None, "time": None, "language": "fr"}
+        return answer(tool("add_routine", {**base, **fields}))
+
+    assert parse_response(routine(unit="month", month_day=1, weekdays=["mon"])) == [
+        AddRoutine("Loyer", [], None, "fr", unit="month", month_day=1)  # weekdays ignored for months
+    ]
+    assert parse_response(routine(every=2, weekdays=["fri"], start_date="2026-10-09")) == [
+        AddRoutine("Loyer", [4], None, "fr", every=2, start_date=date(2026, 10, 9))
+    ]
+    for bad in [dict(unit="month", month_day=None), dict(unit="month", month_day=32), dict(weekdays=[]), dict(unit="year")]:
+        with pytest.raises(BrainError):
+            parse_response(routine(**bad))

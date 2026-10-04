@@ -256,9 +256,25 @@ def format_task(task: Task, now: datetime, lang: str, hide_day: date | None = No
     return f"{task.title} ({', '.join(parts)})" if parts else task.title
 
 
-def format_routine(routine: Routine, lang: str) -> str:
-    """A routine with its schedule, e.g. "Gym — Mon, Tue at 18:00"."""
+def ordinal(day: int, lang: str) -> str:
+    """1 -> "1st" / "1er", 2 -> "2nd" / "2", 31 -> "last day" / "dernier jour"."""
+    if day == 31:
+        return "dernier jour" if lang == "fr" else "last day"
+    if lang == "fr":
+        return "1er" if day == 1 else str(day)
+    suffix = "th" if 11 <= day % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    return f"{day}{suffix}"
+
+
+def format_repeat(routine: Routine, lang: str) -> str:
+    """When a routine happens: "Mon, Tue", "every 2 weeks on Fri", "on the 1st of every month"."""
     t = TEXT[lang]
+    fr = lang == "fr"
+    if routine.unit == "month":
+        day = ordinal(routine.month_day or 1, lang)
+        if routine.every == 1:
+            return f"le {day} de chaque mois" if fr else f"on the {day} of every month"
+        return f"tous les {routine.every} mois, le {day}" if fr else f"every {routine.every} months on the {day}"
     if routine.daily:
         days = t["every_day"]
     elif routine.weekdays == (0, 1, 2, 3, 4):
@@ -267,8 +283,15 @@ def format_routine(routine: Routine, lang: str) -> str:
         days = t["weekend"]
     else:
         days = ", ".join(WEEKDAYS[lang][d] for d in routine.weekdays)
-    at = f" {t['at']} {routine.time:%H:%M}" if routine.time else ""
-    return f"{routine.title} — {days}{at}"
+    if routine.every == 1:
+        return days
+    return f"toutes les {routine.every} semaines, {days}" if fr else f"every {routine.every} weeks, {days}"
+
+
+def format_routine(routine: Routine, lang: str) -> str:
+    """A routine with its schedule, e.g. "Gym — Mon, Tue at 18:00"."""
+    at = f" {TEXT[lang]['at']} {routine.time:%H:%M}" if routine.time else ""
+    return f"{routine.title} — {format_repeat(routine, lang)}{at}"
 
 
 @dataclass(frozen=True)
@@ -313,6 +336,16 @@ def day_items(db: Database, day: date, now: datetime, lang: str, include_daily: 
     return sorted(items, key=lambda item: item.sort_key)  # sorted() keeps ties in order
 
 
+def repeat_fields(action: AddRoutine | UpdateRoutine, now: datetime, current: Routine | None = None) -> dict:
+    """How a new or changed routine repeats.
+
+    Counting starts on the given start date; otherwise a changed routine keeps its own,
+    and a new one starts today.
+    """
+    start = action.start_date or (current.start_date if current else None) or now.date()
+    return dict(unit=action.unit, every=action.every, month_day=action.month_day, start_date=start)
+
+
 def execute(action: Action, db: Database, now: datetime) -> str:
     """Run one action and return the reply text. `now` is in the owner's timezone."""
     if isinstance(action, Reply):
@@ -347,11 +380,17 @@ def execute(action: Action, db: Database, now: datetime) -> str:
         return "\n".join([t["done"], *(f"• {title}" for title in done)])
 
     if isinstance(action, AddRoutine):
-        routine = db.add_routine(action.title, action.weekdays, action.time)
+        routine = db.add_routine(action.title, action.weekdays, action.time, **repeat_fields(action, now))
         return t["routine_added"].format(routine=format_routine(routine, lang))
 
     if isinstance(action, UpdateRoutine):
-        routine = db.update_routine(action.routine_id, action.title, action.weekdays, action.time)
+        routine = db.update_routine(
+            action.routine_id,
+            action.title,
+            action.weekdays,
+            action.time,
+            **repeat_fields(action, now, db.get_routine(action.routine_id)),
+        )
         if routine is None:
             return t["routine_not_found"]
         return t["routine_updated"].format(routine=format_routine(routine, lang))

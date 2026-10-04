@@ -46,7 +46,8 @@ def test_weekly_review():
     for d in range(28, 31):
         db.check_routine(pills.id, date(2026, 9, d))
     done = db.add_task("Bank")
-    db.complete_task(done.id)
+    with patch("majordome.db.utc_now", return_value=datetime(2026, 10, 2, 9, 0, tzinfo=timezone.utc)):
+        db.complete_task(done.id)  # on Friday, not at the real current time
     db.add_task("Late", due_date=date(2026, 10, 1))
     db.add_task("Dentist", due_date=date(2026, 10, 8))
     db.add_someday("Learn guitar", "Learning")
