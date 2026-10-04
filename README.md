@@ -4,7 +4,7 @@ A personal assistant that lives in Telegram. Talk to it by voice or text, in Fre
 
 Un assistant personnel qui vit dans Telegram. Parle-lui à la voix ou par écrit, en français ou en anglais.
 
-> 🚧 **Work in progress / En construction** — for now the bot handles tasks by text (add, complete, "what's left today?"). / Pour l'instant le bot gère les tâches par écrit (ajouter, cocher, « qu'est-ce qu'il me reste ? »).
+> 🚧 **Work in progress / En construction** — for now the bot handles tasks by text or voice (add, complete, "what's left today?"). / Pour l'instant le bot gère les tâches à l'écrit ou à la voix (ajouter, cocher, « qu'est-ce qu'il me reste ? »).
 
 **[🇬🇧 English](#-english) · [🇫🇷 Français](#-français)**
 
@@ -120,7 +120,7 @@ cp .env.example .env        # then fill in your keys (use a separate test bot!)
 .venv/bin/pytest
 ```
 
-Code lives in `majordome/`: `config.py` (environment variables), `db.py` (SQLite + migrations), `bot.py` (Telegram handlers and owner lock), `brain.py` (Claude reads the message and picks a tool), `actions.py` (Python carries out the tool call on the database). Railway runs `python -m majordome` (see `railway.json`) and redeploys on every push to `main`.
+Code lives in `majordome/`: `config.py` (environment variables), `db.py` (SQLite + migrations), `bot.py` (Telegram handlers and owner lock), `brain.py` (Claude reads the message and picks a tool), `actions.py` (Python carries out the tool call on the database), `voice.py` (Whisper transcription). Railway runs `python -m majordome` (see `railway.json`) and redeploys on every push to `main`.
 
 **Railway template (for the Deploy button):** create the service from this repo, attach a **volume** (any mount path; the database goes there automatically via `RAILWAY_VOLUME_MOUNT_PATH`), mark the three API keys as required variables, then publish it as a template and replace `REPLACE_ME` in the links above.
 
