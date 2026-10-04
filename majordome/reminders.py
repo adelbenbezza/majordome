@@ -7,7 +7,7 @@ Each message is recorded once sent (Database.mark_notified), so it never repeats
 
 import math
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from .actions import TEXT, format_task
 from .db import Database
@@ -33,11 +33,25 @@ def _reminder_text(start: datetime, now: datetime, item: str, lang: str) -> str:
     return TEXT[lang]["reminder_in"].format(minutes=minutes, item=item)
 
 
+def in_quiet_hours(moment: time, quiet: tuple[time, time] | None) -> bool:
+    """Whether `moment` falls in the quiet hours, which can run past midnight (22:00-07:00)."""
+    if quiet is None:
+        return False
+    start, end = quiet
+    if start <= end:
+        return start <= moment < end
+    return moment >= start or moment < end
+
+
 def due_notices(db: Database, now: datetime, lang: str) -> list[Notice]:
-    """Messages due at `now` (in the owner's timezone) that haven't been sent yet."""
+    """Messages due at `now` (in the owner's timezone) that haven't been sent yet.
+
+    During quiet hours nothing is due. Nothing is marked as sent either, so a reminder
+    that's still relevant when the quiet hours end goes out then.
+    """
     lead = timedelta(minutes=db.get_reminder_minutes())
-    if not lead:
-        return []  # reminders (and follow-ups) are off
+    if not lead or in_quiet_hours(now.time(), db.get_quiet_hours()):
+        return []  # reminders (and follow-ups) are off, or it's quiet time
     today = now.date()
     notices = []
 

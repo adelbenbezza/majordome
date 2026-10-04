@@ -95,3 +95,19 @@ def test_reminders_off_and_custom_lead():
     assert texts(db, at(14, 50)) == ["⏰ In 10 min: Bank (15:00)"]
     db.set_reminder_minutes(0)
     assert texts(db, at(15)) == []
+
+
+def test_quiet_hours():
+    from majordome.reminders import in_quiet_hours
+
+    night = (time(22, 0), time(7, 0))
+    assert in_quiet_hours(time(23, 30), night) and in_quiet_hours(time(6, 59), night)
+    assert not in_quiet_hours(time(7, 0), night) and not in_quiet_hours(time(21, 59), night)
+    assert in_quiet_hours(time(13, 0), (time(12, 0), time(14, 0)))
+    assert not in_quiet_hours(time(3, 0), None)
+
+    db = Database(":memory:")
+    add_task_at(db, "Early train", at(7, 15), created=at(0))
+    db.set_quiet_hours(night)
+    assert texts(db, at(6, 45)) == []  # quiet: held back...
+    assert texts(db, at(7, 0)) == ["⏰ In 15 min: Early train (07:15)"]  # ...and sent once quiet hours end
