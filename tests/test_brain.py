@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from majordome.brain import AddTasks, BrainError, CompleteTasks, ListTasks, NewTask, Reply, SetBriefTime, parse_response
+from majordome.brain import AddRoutine, AddTasks, ListRoutines, RemoveRoutines, UpdateRoutine, BrainError, CompleteTasks, ListTasks, NewTask, Reply, SetBriefTime, parse_response
 
 
 def answer(*blocks, stop_reason="tool_use"):
@@ -87,3 +87,25 @@ def test_set_brief_time():
     assert parse_response(answer(tool("set_brief_time", {"time": None, "language": "en"}))) == [
         SetBriefTime(None, "en")
     ]
+
+
+def test_routine_tools():
+    message = answer(
+        tool("add_routine", {"title": "Gym", "weekdays": ["tue", "mon"], "time": "18:00", "language": "fr"}),
+        tool("complete_tasks", {"task_ids": [], "routine_ids": [2], "language": "fr"}),
+        tool("update_routine", {"routine_id": 1, "title": "Gym", "weekdays": ["mon"], "time": None, "language": "fr"}),
+        tool("remove_routines", {"routine_ids": [4], "language": "fr"}),
+        tool("list_routines", {"language": "en"}),
+    )
+    assert parse_response(message) == [
+        AddRoutine("Gym", [0, 1], time(18, 0), "fr"),
+        CompleteTasks([], "fr", routine_ids=[2]),
+        UpdateRoutine(1, "Gym", [0], None, "fr"),
+        RemoveRoutines([4], "fr"),
+        ListRoutines("en"),
+    ]
+
+
+def test_routine_without_days_is_invalid():
+    with pytest.raises(BrainError):
+        parse_response(answer(tool("add_routine", {"title": "Gym", "weekdays": [], "time": None, "language": "en"})))
