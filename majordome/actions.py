@@ -22,10 +22,9 @@ from .brain import (
     RemoveRoutines,
     Reply,
     RescheduleTasks,
-    SetDailyTime,
-    SetReminders,
     Show,
     UpdateRoutine,
+    UpdateSetting,
 )
 from .db import Database, Routine, Task
 
@@ -87,6 +86,32 @@ TEXT = {
         "checked": "✅ Coché :",
         "item_not_found": "Je n'ai pas trouvé ça dans tes listes.",
         "cleared": "🧹 Liste « {list} » vidée.",
+        "timezone_set": "🌍 C'est noté : fuseau horaire {tz} (il y est {time}).",
+        "quiet_set": "🌙 Heures calmes : pas de rappels entre {start} et {end}.",
+        "quiet_off": "🔔 Heures calmes désactivées.",
+        "settings": "⚙️ Tes réglages",
+        "s_language": "Langue : je réponds dans la langue de ton message",
+        "s_timezone": "Fuseau horaire : {tz}",
+        "s_brief": "Brief du matin : {value}",
+        "s_checkin": "Point du soir : {value}",
+        "s_reminders": "Rappels : {value}",
+        "s_quiet": "Heures calmes : {value}",
+        "s_model": "Modèle d'IA : {model} (réglé dans Railway)",
+        "s_off": "désactivé",
+        "s_minutes_before": "{minutes} min avant",
+        "s_quiet_hours": "de {start} à {end}",
+        "settings_help": (
+            "Pour changer quelque chose, dis-le simplement :\n"
+            "« brief à 7h30 » · « point du soir à 20h » · « rappelle-moi 15 min avant » · "
+            "« j'habite à Montréal maintenant » · « pas de rappels entre 22h et 7h » · « plus de brief »"
+        ),
+        "usage": "💶 Ce mois-ci (depuis le {start})",
+        "usage_claude": "Claude ({model}) : {calls} messages, ≈ {cost}",
+        "usage_whisper": "Messages vocaux : {minutes} min, ≈ {cost}",
+        "usage_unknown": "prix inconnu",
+        "usage_total": "Total IA : ≈ {cost}",
+        "usage_none": "Aucune utilisation de l'IA ce mois-ci pour l'instant.",
+        "usage_note": "Estimation à partir des tarifs publics. L'hébergement Railway (~5 $/mois) est en plus.",
         "every_day": "tous les jours",
         "weekdays": "en semaine",
         "weekend": "le week-end",
@@ -141,6 +166,32 @@ TEXT = {
         "checked": "✅ Ticked off:",
         "item_not_found": "I couldn't find that in your lists.",
         "cleared": "🧹 \"{list}\" list emptied.",
+        "timezone_set": "🌍 Got it: timezone {tz} (it's {time} there).",
+        "quiet_set": "🌙 Quiet hours: no reminders between {start} and {end}.",
+        "quiet_off": "🔔 Quiet hours turned off.",
+        "settings": "⚙️ Your settings",
+        "s_language": "Language: I reply in the language you write in",
+        "s_timezone": "Timezone: {tz}",
+        "s_brief": "Morning brief: {value}",
+        "s_checkin": "Evening check-in: {value}",
+        "s_reminders": "Reminders: {value}",
+        "s_quiet": "Quiet hours: {value}",
+        "s_model": "AI model: {model} (set in Railway)",
+        "s_off": "off",
+        "s_minutes_before": "{minutes} min before",
+        "s_quiet_hours": "from {start} to {end}",
+        "settings_help": (
+            "To change anything, just say it:\n"
+            "\"brief at 7:30\" · \"check in at 8pm\" · \"remind me 15 min before\" · "
+            "\"I live in Montreal now\" · \"no reminders between 10pm and 7am\" · \"no more brief\""
+        ),
+        "usage": "💶 This month (since {start})",
+        "usage_claude": "Claude ({model}): {calls} messages, ≈ {cost}",
+        "usage_whisper": "Voice notes: {minutes} min, ≈ {cost}",
+        "usage_unknown": "unknown price",
+        "usage_total": "AI total: ≈ {cost}",
+        "usage_none": "No AI usage this month yet.",
+        "usage_note": "Estimated from public prices. Railway hosting (~$5/month) comes on top.",
         "every_day": "every day",
         "weekdays": "on weekdays",
         "weekend": "at weekends",
@@ -317,18 +368,9 @@ def execute(action: Action, db: Database, now: datetime) -> str:
     if isinstance(action, ListTasks):
         return format_tasks(db, now, action.start, action.end, lang)
 
-    if isinstance(action, SetDailyTime):
-        # The bot reschedules the daily job after this (see bot.py).
-        db.set_daily_time(action.message, action.time)
-        if action.time is None:
-            return t[f"{action.message}_off"]
-        return t[f"{action.message}_set"].format(time=f"{action.time:%H:%M}")
-
-    if isinstance(action, SetReminders):
-        db.set_reminder_minutes(action.minutes_before)
-        if action.minutes_before == 0:
-            return t["reminders_off"]
-        return t["reminders_set"].format(minutes=action.minutes_before)
+    if isinstance(action, UpdateSetting):
+        # The bot reschedules the daily jobs after this when needed (see bot.py).
+        return apply_setting(db, action.setting, action.value, lang)
 
     if isinstance(action, RescheduleTasks):
         moved = []
@@ -449,3 +491,89 @@ def format_show(db: Database, what: str, name: str | None, lang: str) -> str:
     if not items:
         return t["list_empty"].format(list=found[1])
     return "\n".join([t["list"].format(list=found[1]), *(f"• {item.text}" for item in items)])
+
+
+def apply_setting(db: Database, setting: str, value, lang: str) -> str:
+    """Save one setting (already checked by brain.py) and confirm it."""
+    t = TEXT[lang]
+    if setting in ("brief_time", "checkin_time"):
+        name = setting.removesuffix("_time")
+        db.set_daily_time(name, value)
+        return t[f"{name}_off"] if value is None else t[f"{name}_set"].format(time=f"{value:%H:%M}")
+    if setting == "reminder_minutes":
+        db.set_reminder_minutes(value)
+        return t["reminders_off"] if value == 0 else t["reminders_set"].format(minutes=value)
+    if setting == "timezone":
+        db.set_timezone(value)
+        return t["timezone_set"].format(tz=value.key, time=f"{datetime.now(value):%H:%M}")
+    if setting == "quiet_hours":
+        db.set_quiet_hours(value)
+        if value is None:
+            return t["quiet_off"]
+        return t["quiet_set"].format(start=f"{value[0]:%H:%M}", end=f"{value[1]:%H:%M}")
+    raise ValueError(f"Unknown setting {setting!r}")
+
+
+def format_settings(db: Database, tz_name: str, model: str, lang: str) -> str:
+    t = TEXT[lang]
+
+    def daily(name: str) -> str:
+        at = db.get_daily_time(name)
+        return f"{at:%H:%M}" if at else t["s_off"]
+
+    minutes = db.get_reminder_minutes()
+    quiet = db.get_quiet_hours()
+    lines = [
+        t["settings"],
+        "",
+        f"• {t['s_language']}",
+        f"• {t['s_timezone'].format(tz=tz_name)}",
+        f"• {t['s_brief'].format(value=daily('brief'))}",
+        f"• {t['s_checkin'].format(value=daily('checkin'))}",
+        f"• {t['s_reminders'].format(value=t['s_minutes_before'].format(minutes=minutes) if minutes else t['s_off'])}",
+        f"• {t['s_quiet'].format(value=t['s_quiet_hours'].format(start=f'{quiet[0]:%H:%M}', end=f'{quiet[1]:%H:%M}') if quiet else t['s_off'])}",
+        f"• {t['s_model'].format(model=model)}",
+        "",
+        t["settings_help"],
+    ]
+    return "\n".join(lines)
+
+
+# Public prices in US dollars (what the APIs bill in): per million tokens (input, output),
+# and per minute of audio for Whisper. Update when prices change.
+CLAUDE_PRICES = {
+    "claude-haiku-4-5": (1.00, 5.00),
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-sonnet-5": (2.00, 10.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-opus-5-5": (4.00, 20.00),
+    "claude-opus-5": (5.00, 25.00),
+}
+WHISPER_PRICE_PER_MINUTE = 0.006
+
+
+def format_usage(db: Database, now: datetime, lang: str) -> str:
+    """AI cost since the start of the month (in the owner's timezone)."""
+    t = TEXT[lang]
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    lines = [t["usage"].format(start=format_day(month_start.date(), now.date(), lang)), ""]
+    total, any_usage = 0.0, False
+    for service, model, input_tokens, output_tokens, seconds, calls in db.usage_since(month_start):
+        any_usage = True
+        if service == "whisper":
+            cost = seconds / 60 * WHISPER_PRICE_PER_MINUTE
+            total += cost
+            lines.append(f"• {t['usage_whisper'].format(minutes=round(seconds / 60, 1), cost=f'${cost:.2f}')}")
+            continue
+        price = CLAUDE_PRICES.get(model)
+        if price:
+            cost = (input_tokens * price[0] + output_tokens * price[1]) / 1_000_000
+            total += cost
+            cost_text = f"${cost:.2f}"
+        else:
+            cost_text = t["usage_unknown"]
+        lines.append(f"• {t['usage_claude'].format(model=model, calls=calls, cost=cost_text)}")
+    if not any_usage:
+        return t["usage_none"]
+    lines += ["", t["usage_total"].format(cost=f"${total:.2f}"), t["usage_note"]]
+    return "\n".join(lines)

@@ -18,12 +18,22 @@ from telegram.ext import (
     filters,
 )
 
-from .actions import TEXT, execute, format_brief, format_checkin, format_task, format_tasks, move_to_tomorrow
-from .brain import Brain, BrainError, ListTasks, Reply, SetDailyTime, Snapshot
+from .actions import (
+    TEXT,
+    execute,
+    format_brief,
+    format_checkin,
+    format_settings,
+    format_task,
+    format_tasks,
+    format_usage,
+    move_to_tomorrow,
+)
+from .brain import Brain, BrainError, ListTasks, Reply, Snapshot, UpdateSetting
 from .buttons import evening_keyboard, parse_callback, parse_move, tick, today_keyboard
 from .config import Config
 from .db import Database
-from .scheduler import schedule_daily, start_clock
+from .scheduler import owner_timezone, schedule_daily, start_clock
 from .voice import MAX_SECONDS, Transcriber, VoiceError
 
 log = logging.getLogger(__name__)
@@ -65,37 +75,72 @@ async def owner_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         raise ApplicationHandlerStop
 
 
+ONBOARDED_KEY = "onboarded"
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Welcome message. The first time, also invite the owner to adjust the main settings."""
     db: Database = context.bot_data["db"]
     db.set_language("fr" if is_french(update) else "en")
-    brief_time = db.get_daily_time("brief")
-    if is_french(update):
-        text = (
-            "Bonjour, je suis Majordome 🎩\n\n"
-            "Écris-moi ou envoie un message vocal : dis-moi ce que tu as à faire (« appeler la banque vendredi à 15h »), "
-            "ce que tu as fait (« j'ai pris mes compléments »), "
-            "tes routines (« salle de sport le lundi et le mardi à 18h »), "
-            "tes envies sans date (« un jour j'aimerais apprendre la guitare »), "
-            "tes listes et notes (« ajoute du lait à la liste de courses »), "
-            "ou demande « qu'est-ce qu'il me reste aujourd'hui ? ». /today affiche ta liste."
-        )
-        if brief_time:
-            text += f"\n\nChaque matin à {brief_time:%H:%M}, je t'envoie ta journée. Dis-moi si tu préfères une autre heure."
-        text += "\n\nJe te rappelle les choses prévues à une heure précise, et le soir je fais le point avec toi."
-    else:
-        text = (
-            "Hello, I'm Majordome 🎩\n\n"
-            "Write or send a voice note: tell me what you need to do (\"call the bank on Friday at 3pm\"), "
-            "what you've done (\"I took my supplements\"), "
-            "your routines (\"gym on Mondays and Tuesdays at 6pm\"), "
-            "wishes with no date (\"one day I'd like to learn guitar\"), "
-            "lists and notes (\"add milk to the shopping list\"), "
-            "or ask \"what's left today?\". /today shows your list."
-        )
-        if brief_time:
-            text += f"\n\nEvery morning at {brief_time:%H:%M}, I'll send you your day. Tell me if you'd like another time."
-        text += "\n\nI'll remind you of things planned at a set time, and check in with you in the evening."
+    await update.effective_message.reply_text(pick(update, (
+        "Bonjour, je suis Majordome 🎩\n\n"
+        "Écris-moi ou envoie un message vocal : dis-moi ce que tu as à faire (« appeler la banque vendredi à 15h »), "
+        "ce que tu as fait (« j'ai pris mes compléments »), "
+        "tes routines (« salle de sport le lundi et le mardi à 18h »), "
+        "tes envies sans date (« un jour j'aimerais apprendre la guitare »), "
+        "tes listes et notes (« ajoute du lait à la liste de courses »), "
+        "ou demande « qu'est-ce qu'il me reste aujourd'hui ? ».\n\n"
+        "Chaque matin je t'envoie ta journée, je te rappelle ce qui est prévu à une heure précise, "
+        "et le soir je fais le point avec toi.\n\n"
+        "Commandes : /today ta liste du jour · /settings tes réglages · /usage ce que ça coûte",
+        "Hello, I'm Majordome 🎩\n\n"
+        "Write or send a voice note: tell me what you need to do (\"call the bank on Friday at 3pm\"), "
+        "what you've done (\"I took my supplements\"), "
+        "your routines (\"gym on Mondays and Tuesdays at 6pm\"), "
+        "wishes with no date (\"one day I'd like to learn guitar\"), "
+        "lists and notes (\"add milk to the shopping list\"), "
+        "or ask \"what's left today?\".\n\n"
+        "Every morning I send you your day, I remind you of things planned at a set time, "
+        "and in the evening I check in with you.\n\n"
+        "Commands: /today your day · /settings your settings · /usage what it costs",
+    )))
+    if db.get_setting(ONBOARDED_KEY):
+        return
+    # First time: show the defaults and invite changes in one sentence (Claude handles it).
+    db.set_setting(ONBOARDED_KEY, "1")
+    config: Config = context.bot_data["config"]
+    tz = owner_timezone(config, db)
+    brief, checkin = db.get_daily_time("brief"), db.get_daily_time("checkin")
+    await update.effective_message.reply_text(pick(update, (
+        f"⚙️ Avant de commencer, voici mes réglages :\n"
+        f"• Fuseau horaire : {tz.key} (il est {datetime.now(tz):%H:%M})\n"
+        f"• Brief du matin : {brief:%H:%M}\n• Point du soir : {checkin:%H:%M}\n"
+        f"• Rappels : {db.get_reminder_minutes()} min avant\n\n"
+        "Pour changer, dis-le en une phrase, par exemple : "
+        "« J'habite à Montréal, brief à 7h, point du soir à 21h30, pas de rappels entre 22h et 7h ».\n"
+        "Sinon, rien à faire ! /settings les affiche à tout moment.",
+        f"⚙️ Before we start, here are my settings:\n"
+        f"• Timezone: {tz.key} (it's {datetime.now(tz):%H:%M})\n"
+        f"• Morning brief: {brief:%H:%M}\n• Evening check-in: {checkin:%H:%M}\n"
+        f"• Reminders: {db.get_reminder_minutes()} min before\n\n"
+        "To change them, say it in one sentence, for example: "
+        "\"I live in London, brief at 7, check-in at 9:30pm, no reminders between 10pm and 7am\".\n"
+        "Otherwise, nothing to do! /settings shows them any time.",
+    )))
+
+
+async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    config: Config = context.bot_data["config"]
+    db: Database = context.bot_data["db"]
+    lang = "fr" if is_french(update) else "en"
+    text = format_settings(db, owner_timezone(config, db).key, config.claude_model, lang)
     await update.effective_message.reply_text(text)
+
+
+async def usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db: Database = context.bot_data["db"]
+    lang = "fr" if is_french(update) else "en"
+    await update.effective_message.reply_text(format_usage(db, owner_now(context), lang))
 
 
 BRAIN_ERRORS = {
@@ -157,7 +202,10 @@ BRAIN_ERROR_DEFAULT = (
 
 
 def owner_now(context: ContextTypes.DEFAULT_TYPE) -> datetime:
-    return datetime.now(context.bot_data["config"].timezone)
+    return datetime.now(owner_timezone(context.bot_data["config"], context.bot_data["db"]))
+
+
+RESCHEDULING_SETTINGS = {"brief_time", "checkin_time", "timezone"}
 
 
 def take_snapshot(db: Database, now: datetime) -> Snapshot:
@@ -200,7 +248,8 @@ async def understand_and_reply(update: Update, context: ContextTypes.DEFAULT_TYP
         languages = [action.language for action in actions if not isinstance(action, Reply)]
         if languages:
             db.set_language(languages[0])
-        if any(isinstance(action, SetDailyTime) for action in actions):
+        # These settings change when the daily messages go out.
+        if any(isinstance(a, UpdateSetting) and a.setting in RESCHEDULING_SETTINGS for a in actions):
             schedule_daily(context.application)
         # "What's left today?" gets ✅ buttons, like /today.
         if any(isinstance(a, ListTasks) and a.start == a.end == now.date() for a in actions):
@@ -231,6 +280,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     filename = getattr(media, "file_name", None) or "voice.ogg"
     try:
         text = await transcriber.transcribe(audio, filename)
+        context.bot_data["db"].record_usage("whisper", transcriber.model, seconds=media.duration or 0)
     except VoiceError as error:
         log.warning("Transcription failed: %s", error)
         await message.reply_text(pick(update, VOICE_ERRORS.get(error.kind, VOICE_ERROR_DEFAULT)))
@@ -390,7 +440,11 @@ def build_application(config: Config, db: Database) -> Application:
     # bot_data is a dict shared by all handlers: a simple way to give them config and db.
     app.bot_data["config"] = config
     app.bot_data["db"] = db
-    app.bot_data["brain"] = Brain(config.anthropic_api_key, config.claude_model)
+    app.bot_data["brain"] = Brain(
+        config.anthropic_api_key,
+        config.claude_model,
+        on_usage=lambda model, tokens_in, tokens_out: db.record_usage("claude", model, tokens_in, tokens_out),
+    )
     app.bot_data["transcriber"] = Transcriber(config.openai_api_key)
 
     # Group -1 runs before the default group 0, so the lock sees every update first.
@@ -399,6 +453,8 @@ def build_application(config: Config, db: Database) -> Application:
     app.add_handler(CommandHandler("today", today))
     app.add_handler(CommandHandler("brief", brief))
     app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CommandHandler("settings", settings))
+    app.add_handler(CommandHandler("usage", usage))
     app.add_handler(CallbackQueryHandler(on_done, pattern="^done:"))
     app.add_handler(CallbackQueryHandler(on_reset, pattern="^reset:"))
     app.add_handler(CallbackQueryHandler(on_move, pattern="^move:"))

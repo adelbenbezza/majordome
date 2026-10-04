@@ -108,3 +108,35 @@ def test_clock_runs_every_minute_and_sends_each_reminder_once():
     asyncio.run(clock(context))
     assert len(sent) == 1
     assert sent[0][0] == 42 and sent[0][1].startswith("⏰ In ") and sent[0][2] == "✅ Done"
+
+
+def test_daily_messages_follow_the_timezone_set_by_talking():
+    from zoneinfo import ZoneInfo
+
+    db = Database(":memory:")
+    db.set_timezone(ZoneInfo("America/Montreal"))
+    app = make_app(db)
+    schedule_daily(app)
+    [job] = brief_jobs(app)
+    assert str(job.job.trigger.timezone) == "America/Montreal"
+
+
+def test_setup_message_only_on_first_start():
+    from majordome.bot import start
+
+    db = Database(":memory:")
+    sent = []
+
+    async def reply_text(text):
+        sent.append(text)
+
+    update = SimpleNamespace(
+        effective_message=SimpleNamespace(reply_text=reply_text),
+        effective_user=SimpleNamespace(language_code="fr"),
+    )
+    context = SimpleNamespace(bot_data={"config": CONFIG, "db": db})
+    asyncio.run(start(update, context))
+    assert len(sent) == 2 and sent[1].startswith("⚙️ Avant de commencer")
+    assert "Fuseau horaire : Europe/Paris" in sent[1]
+    asyncio.run(start(update, context))
+    assert len(sent) == 3  # just the welcome the second time

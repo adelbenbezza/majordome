@@ -13,6 +13,7 @@ Two kinds of jobs:
 
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from telegram.ext import Application, ContextTypes
 
@@ -32,10 +33,15 @@ def owner_id(config: Config, db: Database) -> int | None:
     return config.owner_telegram_id or db.get_owner_id()
 
 
+def owner_timezone(config: Config, db: Database) -> ZoneInfo:
+    """The owner's timezone: set by talking to the bot, else the TIMEZONE variable."""
+    return db.get_timezone(config.timezone)
+
+
 def _owner_context(context: ContextTypes.DEFAULT_TYPE):
     config: Config = context.bot_data["config"]
     db: Database = context.bot_data["db"]
-    return owner_id(config, db), db, datetime.now(config.timezone), db.get_language()
+    return owner_id(config, db), db, datetime.now(owner_timezone(config, db)), db.get_language()
 
 
 async def send_brief(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -74,6 +80,7 @@ def schedule_daily(app: Application) -> None:
     config: Config = app.bot_data["config"]
     db: Database = app.bot_data["db"]
 
+    tz = owner_timezone(config, db)
     for name in DAILY_MESSAGES:
         for job in app.job_queue.get_jobs_by_name(name):
             job.schedule_removal()
@@ -82,8 +89,8 @@ def schedule_daily(app: Application) -> None:
             log.info("Daily message %s is off", name)
             continue
         # Attaching the timezone makes JobQueue fire at 08:00 Paris time, summer and winter.
-        app.job_queue.run_daily(DAILY_SENDERS[name], time=at.replace(tzinfo=config.timezone), name=name)
-        log.info("Daily message %s scheduled at %s (%s)", name, f"{at:%H:%M}", config.timezone)
+        app.job_queue.run_daily(DAILY_SENDERS[name], time=at.replace(tzinfo=tz), name=name)
+        log.info("Daily message %s scheduled at %s (%s)", name, f"{at:%H:%M}", tz)
 
 
 def start_clock(app: Application) -> None:

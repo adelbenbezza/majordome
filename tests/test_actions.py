@@ -1,8 +1,8 @@
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from majordome.actions import execute, format_brief, format_checkin, move_to_tomorrow
-from majordome.brain import AddSomeday, AddToList, CheckListItems, ClearList, CloseSomeday, NewSomeday, PromoteSomeday, Show, AddRoutine, AddTasks, RemoveRoutines, UpdateRoutine, CompleteTasks, ListTasks, NewTask, Reply, RescheduleTasks, SetDailyTime, SetReminders
+from majordome.actions import execute, format_brief, format_checkin, format_settings, format_usage, move_to_tomorrow
+from majordome.brain import AddSomeday, AddToList, CheckListItems, ClearList, CloseSomeday, NewSomeday, PromoteSomeday, Show, AddRoutine, AddTasks, RemoveRoutines, UpdateRoutine, CompleteTasks, ListTasks, NewTask, Reply, RescheduleTasks, UpdateSetting
 from majordome.db import Database
 
 PARIS = ZoneInfo("Europe/Paris")
@@ -70,11 +70,11 @@ def test_list_tomorrow_and_week():
 
 def test_set_brief_time():
     db = Database(":memory:")
-    assert execute(SetDailyTime("brief", time(7, 30), "fr"), db, NOW) == (
+    assert execute(UpdateSetting("brief_time", time(7, 30), "fr"), db, NOW) == (
         "☀️ C'est noté : ton brief arrivera chaque matin à 07:30."
     )
     assert db.get_daily_time("brief") == time(7, 30)
-    execute(SetDailyTime("brief", None, "en"), db, NOW)
+    execute(UpdateSetting("brief_time", None, "en"), db, NOW)
     assert db.get_daily_time("brief") is None
 
 
@@ -134,11 +134,11 @@ def test_routines_in_lists():
 
 def test_settings_by_conversation():
     db = Database(":memory:")
-    assert execute(SetDailyTime("checkin", time(20, 30), "en"), db, NOW) == "🌙 Got it: I'll check in every evening at 20:30."
+    assert execute(UpdateSetting("checkin_time", time(20, 30), "en"), db, NOW) == "🌙 Got it: I'll check in every evening at 20:30."
     assert db.get_daily_time("checkin") == time(20, 30)
-    assert execute(SetReminders(15, "fr"), db, NOW) == "⏰ C'est noté : je te préviendrai 15 min avant."
+    assert execute(UpdateSetting("reminder_minutes", 15, "fr"), db, NOW) == "⏰ C'est noté : je te préviendrai 15 min avant."
     assert db.get_reminder_minutes() == 15
-    execute(SetReminders(0, "en"), db, NOW)
+    execute(UpdateSetting("reminder_minutes", 0, "en"), db, NOW)
     assert db.get_reminder_minutes() == 0
 
 
@@ -203,3 +203,50 @@ def test_lists_flow():
     assert execute(ClearList("courses", "en"), db, NOW) == '🧹 "Courses" list emptied.'
     assert execute(Show("lists", "Courses", "en"), db, NOW) == 'Your "Courses" list is empty.'
     assert execute(ClearList("Nope", "en"), db, NOW) == 'I couldn\'t find a list called "Nope".'
+
+
+def test_timezone_and_quiet_hours_settings():
+    from zoneinfo import ZoneInfo
+
+    db = Database(":memory:")
+    reply = execute(UpdateSetting("timezone", ZoneInfo("America/Montreal"), "en"), db, NOW)
+    assert reply.startswith("🌍 Got it: timezone America/Montreal (it's ")
+    assert db.get_timezone(PARIS).key == "America/Montreal"
+    assert execute(UpdateSetting("quiet_hours", (time(22, 0), time(7, 0)), "fr"), db, NOW) == (
+        "🌙 Heures calmes : pas de rappels entre 22:00 et 07:00."
+    )
+    assert execute(UpdateSetting("quiet_hours", None, "en"), db, NOW) == "🔔 Quiet hours turned off."
+
+
+def test_settings_overview():
+    db = Database(":memory:")
+    db.set_daily_time("checkin", None)
+    db.set_quiet_hours((time(22, 0), time(7, 0)))
+    lines = format_settings(db, "Europe/Paris", "claude-haiku-4-5", "en").splitlines()
+    assert lines[:9] == [
+        "⚙️ Your settings",
+        "",
+        "• Language: I reply in the language you write in",
+        "• Timezone: Europe/Paris",
+        "• Morning brief: 08:00",
+        "• Evening check-in: off",
+        "• Reminders: 30 min before",
+        "• Quiet hours: from 22:00 to 07:00",
+        "• AI model: claude-haiku-4-5 (set in Railway)",
+    ]
+
+
+def test_usage_report():
+    db = Database(":memory:")
+    now = datetime.now(PARIS)
+    assert format_usage(db, now, "en") == "No AI usage this month yet."
+    for _ in range(100):
+        db.record_usage("claude", "claude-haiku-4-5", input_tokens=4000, output_tokens=100)
+    db.record_usage("whisper", "whisper-1", seconds=600)
+    db.record_usage("claude", "some-future-model", input_tokens=10, output_tokens=10)
+    lines = format_usage(db, now, "en").splitlines()
+    # 100 × (4000 × $1 + 100 × $5) / 1M = $0.45; 10 min × $0.006 = $0.06
+    assert "• Claude (claude-haiku-4-5): 100 messages, ≈ $0.45" in lines
+    assert "• Claude (some-future-model): 1 messages, ≈ unknown price" in lines
+    assert "• Voice notes: 10.0 min, ≈ $0.06" in lines
+    assert "AI total: ≈ $0.51" in lines

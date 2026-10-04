@@ -47,6 +47,8 @@ Open your bot in Telegram (search for its username) and send `/start` **right aw
 ### Commands
 - `/today`: what's left today, with ✅ buttons
 - `/brief`: show the morning brief now
+- `/settings`: your settings (brief and check-in times, reminders, timezone, quiet hours)
+- `/usage`: what the AI has cost you this month
 - `/reset`: delete all tasks, routines, Someday list, lists and notes to start fresh (asks for confirmation; keeps your settings)
 
 Everything else, just say it: "call the bank on Friday at 3pm", "gym on Mondays at 6pm", "send my brief at 7:30", "check in at 8:30pm", "remind me 15 minutes before", "one day I'd like to visit Japan", "add eggs to the shopping list".
@@ -61,7 +63,7 @@ All set in Railway's *Variables* tab. See [`.env.example`](.env.example) for the
 | Variable | What it does | Default |
 | --- | --- | --- |
 | `OWNER_TELEGRAM_ID` | Your Telegram user ID, to lock the bot to you | first person to send `/start` |
-| `TIMEZONE` | Your timezone | `Europe/Paris` |
+| `TIMEZONE` | Starting timezone (you can also just tell the bot "I live in Montreal") | `Europe/Paris` |
 | `CLAUDE_MODEL` | Which Claude model to use | `claude-haiku-4-5` |
 | `ENABLE_DASHBOARD` | `true` for the web dashboard (coming later) | `false` |
 
@@ -104,6 +106,8 @@ Ouvre ton bot dans Telegram (cherche son nom d'utilisateur) et envoie `/start` *
 ### Commandes
 - `/today` : ce qu'il te reste aujourd'hui, avec des boutons ✅
 - `/brief` : affiche le brief du matin tout de suite
+- `/settings` : tes réglages (heures du brief et du point du soir, rappels, fuseau horaire, heures calmes)
+- `/usage` : ce que l'IA t'a coûté ce mois-ci
 - `/reset` : supprime toutes les tâches, routines, la liste « Un jour », les listes et notes pour repartir de zéro (demande confirmation ; garde tes réglages)
 
 Pour tout le reste, dis-le simplement : « appeler la banque vendredi à 15h », « salle de sport le lundi à 18h », « envoie le brief à 7h30 », « fais le point à 20h30 », « rappelle-moi 15 minutes avant », « un jour j'aimerais aller au Japon », « ajoute des œufs à la liste de courses ».
@@ -118,7 +122,7 @@ Tous dans l'onglet *Variables* de Railway. La liste complète est dans [`.env.ex
 | Variable | À quoi ça sert | Par défaut |
 | --- | --- | --- |
 | `OWNER_TELEGRAM_ID` | Ton identifiant Telegram, pour réserver le bot à toi seul | la première personne qui envoie `/start` |
-| `TIMEZONE` | Ton fuseau horaire | `Europe/Paris` |
+| `TIMEZONE` | Fuseau horaire de départ (tu peux aussi dire au bot « j'habite à Montréal ») | `Europe/Paris` |
 | `CLAUDE_MODEL` | Le modèle Claude utilisé | `claude-haiku-4-5` |
 | `ENABLE_DASHBOARD` | `true` pour le tableau de bord web (bientôt) | `false` |
 
