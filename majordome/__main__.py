@@ -13,7 +13,10 @@ from .db import Database
 
 def main() -> None:
     logging.basicConfig(
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        level=logging.INFO,
+        # Python logs to stderr by default, which Railway marks as errors. Use stdout.
+        stream=sys.stdout,
     )
     # httpx logs every request to Telegram (including the token in the URL): keep it quiet.
     logging.getLogger("httpx").setLevel(logging.WARNING)
