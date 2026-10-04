@@ -60,11 +60,11 @@ def test_brief_time_and_language_settings():
     from datetime import time
 
     db = Database(":memory:")
-    assert db.get_brief_time() == time(8, 0)  # default
-    db.set_brief_time(time(7, 30))
-    assert db.get_brief_time() == time(7, 30)
-    db.set_brief_time(None)
-    assert db.get_brief_time() is None  # turned off
+    assert db.get_daily_time("brief") == time(8, 0)  # default
+    db.set_daily_time("brief", time(7, 30))
+    assert db.get_daily_time("brief") == time(7, 30)
+    db.set_daily_time("brief", None)
+    assert db.get_daily_time("brief") is None  # turned off
     assert db.get_language() == "en"
     db.set_language("fr")
     assert db.get_language() == "fr"
@@ -100,7 +100,7 @@ def test_wipe_history_keeps_owner_and_settings():
 
     db = Database(":memory:")
     db.claim_owner(42)
-    db.set_brief_time(time(7, 0))
+    db.set_daily_time("brief", time(7, 0))
     db.set_language("fr")
     routine = db.add_routine("Gym", [0], time(18, 0))
     db.check_routine(routine.id, date(2026, 10, 5))
@@ -110,7 +110,7 @@ def test_wipe_history_keeps_owner_and_settings():
     db.wipe_history()
     assert db.open_tasks() == [] and db.active_routines() == []
     assert db.conn.execute("SELECT COUNT(*) FROM routine_checks").fetchone()[0] == 0
-    assert db.get_owner_id() == 42 and db.get_brief_time() == time(7, 0) and db.get_language() == "fr"
+    assert db.get_owner_id() == 42 and db.get_daily_time("brief") == time(7, 0) and db.get_language() == "fr"
     assert db.get_generation() == 1
     db.wipe_history()
     assert db.get_generation() == 2

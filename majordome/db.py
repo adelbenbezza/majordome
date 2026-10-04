@@ -55,13 +55,29 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY (routine_id, day)
     );
     """,
+    # 4: messages the bot sent on its own (reminders, follow-ups), so each is sent once
+    # even if the bot restarts. slot says which occurrence: a task's due time, or a
+    # routine's day. Changing a task's time gives a new slot, so a new reminder.
+    """
+    CREATE TABLE notifications (
+        kind    TEXT NOT NULL,
+        item_id INTEGER NOT NULL,
+        slot    TEXT NOT NULL,
+        type    TEXT NOT NULL,
+        sent_at TEXT NOT NULL,
+        PRIMARY KEY (kind, item_id, slot, type)
+    );
+    """,
 ]
 
 OWNER_KEY = "owner_telegram_id"
-BRIEF_TIME_KEY = "brief_time"  # "HH:MM" in the owner's timezone, or "off"
+# Messages sent every day at a time the owner can change ("HH:MM" local time, or "off"),
+# with their default time.
+DAILY_MESSAGES = {"brief": time(8, 0), "checkin": time(21, 0)}
+REMINDER_MINUTES_KEY = "reminder_minutes"  # how long before a timed item to remind; 0 = off
+DEFAULT_REMINDER_MINUTES = 30
 LANGUAGE_KEY = "language"  # "fr" or "en": used for messages the bot sends on its own
 GENERATION_KEY = "generation"  # goes up by one at each reset (see wipe_history)
-DEFAULT_BRIEF_TIME = time(8, 0)
 
 
 def utc_now() -> datetime:
@@ -75,6 +91,7 @@ class Task:
     due_date: date | None
     due_at: datetime | None  # UTC
     done_at: datetime | None  # UTC
+    created_at: datetime | None = None  # UTC
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Task":
@@ -84,6 +101,7 @@ class Task:
             due_date=date.fromisoformat(row["due_date"]) if row["due_date"] else None,
             due_at=datetime.fromisoformat(row["due_at"]) if row["due_at"] else None,
             done_at=datetime.fromisoformat(row["done_at"]) if row["done_at"] else None,
+            created_at=datetime.fromisoformat(row["created_at"]),
         )
 
 
@@ -94,6 +112,7 @@ class Routine:
     weekdays: tuple[int, ...]  # Monday = 0 ... Sunday = 6
     time: time | None  # local wall-clock time
     active: bool
+    created_at: datetime | None = None  # UTC
 
     @property
     def daily(self) -> bool:
@@ -110,6 +129,7 @@ class Routine:
             weekdays=tuple(int(d) for d in row["weekdays"].split(",")),
             time=time.fromisoformat(row["time"]) if row["time"] else None,
             active=bool(row["active"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
         )
 
 
@@ -170,17 +190,26 @@ class Database:
             )
         return self.get_owner_id() == user_id
 
-    def get_brief_time(self) -> time | None:
-        """The morning brief time, or None if the owner turned it off."""
-        value = self.get_setting(BRIEF_TIME_KEY)
+    def get_daily_time(self, name: str) -> time | None:
+        """When the daily message `name` ("brief" or "checkin") is sent, or None if turned off."""
+        value = self.get_setting(f"{name}_time")
         if value is None:
-            return DEFAULT_BRIEF_TIME
+            return DAILY_MESSAGES[name]
         if value == "off":
             return None
         return time.fromisoformat(value)
 
-    def set_brief_time(self, value: time | None) -> None:
-        self.set_setting(BRIEF_TIME_KEY, value.strftime("%H:%M") if value else "off")
+    def set_daily_time(self, name: str, value: time | None) -> None:
+        if name not in DAILY_MESSAGES:
+            raise ValueError(f"Unknown daily message {name!r}")
+        self.set_setting(f"{name}_time", value.strftime("%H:%M") if value else "off")
+
+    def get_reminder_minutes(self) -> int:
+        value = self.get_setting(REMINDER_MINUTES_KEY)
+        return DEFAULT_REMINDER_MINUTES if value is None else int(value)
+
+    def set_reminder_minutes(self, minutes: int) -> None:
+        self.set_setting(REMINDER_MINUTES_KEY, str(max(0, minutes)))
 
     def get_language(self) -> str:
         return self.get_setting(LANGUAGE_KEY) or "en"
@@ -199,6 +228,7 @@ class Database:
         tell they're out of date instead of ticking off the wrong thing.
         """
         with self.conn:
+            self.conn.execute("DELETE FROM notifications")
             self.conn.execute("DELETE FROM routine_checks")
             self.conn.execute("DELETE FROM routines")
             self.conn.execute("DELETE FROM tasks")
@@ -235,6 +265,27 @@ class Database:
                 (utc_now().isoformat(), task_id),
             )
         return self.get_task(task_id) if cursor.rowcount else None
+
+    def reschedule_task(self, task_id: int, due_date: date | None, due_at: datetime | None) -> Task | None:
+        """Give an open task a new day (and time). Returns it, or None if it's done or gone."""
+        with self.conn:
+            cursor = self.conn.execute(
+                "UPDATE tasks SET due_date = ?, due_at = ? WHERE id = ? AND done_at IS NULL",
+                (
+                    due_date.isoformat() if due_date else None,
+                    due_at.astimezone(timezone.utc).isoformat() if due_at else None,
+                    task_id,
+                ),
+            )
+        return self.get_task(task_id) if cursor.rowcount else None
+
+    def timed_tasks_between(self, start: datetime, end: datetime) -> list[Task]:
+        """Open tasks with a due time from `start` to `end` (both aware datetimes)."""
+        rows = self.conn.execute(
+            "SELECT * FROM tasks WHERE done_at IS NULL AND due_at BETWEEN ? AND ? ORDER BY due_at",
+            (start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()),
+        ).fetchall()
+        return [Task.from_row(row) for row in rows]
 
     def open_tasks(self, limit: int = 100) -> list[Task]:
         """Undone tasks, soonest first (undated ones last)."""
@@ -327,3 +378,21 @@ class Database:
     def routines_left(self, day: date) -> list[Routine]:
         """Routines that happen on `day` and aren't done yet."""
         return [r for r in self.routines_on(day) if not self.is_routine_done(r.id, day)]
+
+    # --- notifications ----------------------------------------------------
+
+    def mark_notified(self, kind: str, item_id: int, slot: str, type_: str) -> bool:
+        """Record that a message was sent. Returns False if it had already been sent."""
+        with self.conn:
+            cursor = self.conn.execute(
+                "INSERT OR IGNORE INTO notifications (kind, item_id, slot, type, sent_at) VALUES (?, ?, ?, ?, ?)",
+                (kind, item_id, slot, type_, utc_now().isoformat()),
+            )
+        return cursor.rowcount == 1
+
+    def was_notified(self, kind: str, item_id: int, slot: str, type_: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM notifications WHERE kind = ? AND item_id = ? AND slot = ? AND type = ?",
+            (kind, item_id, slot, type_),
+        ).fetchone()
+        return row is not None
