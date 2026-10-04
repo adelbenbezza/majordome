@@ -4,7 +4,7 @@ A personal assistant that lives in Telegram. Talk to it by voice or text, in Fre
 
 Un assistant personnel qui vit dans Telegram. Parle-lui à la voix ou par écrit, en français ou en anglais.
 
-> 🚧 **Work in progress / En construction** — for now the bot handles tasks by text or voice (add, complete, "what's left today?") and sends a morning brief. / Pour l'instant le bot gère les tâches à l'écrit ou à la voix (ajouter, cocher, « qu'est-ce qu'il me reste ? ») et envoie un brief chaque matin.
+> 🚧 **Work in progress / En construction** — for now the bot handles tasks by text or voice (add, complete, "what's left today?"), recurring routines, and a morning brief. / Pour l'instant le bot gère les tâches à l'écrit ou à la voix (ajouter, cocher, « qu'est-ce qu'il me reste ? »), les routines, et envoie un brief chaque matin.
 
 **[🇬🇧 English](#-english) · [🇫🇷 Français](#-français)**
 

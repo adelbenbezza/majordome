@@ -2,7 +2,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from majordome.actions import execute, format_brief
-from majordome.brain import AddTasks, CompleteTasks, ListTasks, NewTask, Reply, SetBriefTime
+from majordome.brain import AddRoutine, AddTasks, ListRoutines, RemoveRoutines, UpdateRoutine, CompleteTasks, ListTasks, NewTask, Reply, SetBriefTime
 from majordome.db import Database
 
 PARIS = ZoneInfo("Europe/Paris")
@@ -85,3 +85,48 @@ def test_brief():
     db.add_task("Gym", due_date=TODAY, due_at=datetime(2026, 10, 4, 18, 0, tzinfo=PARIS))
     db.add_task("Tomorrow's", due_date=TOMORROW)
     assert format_brief(db, NOW, "fr") == "☀️ Bonjour ! Au programme aujourd'hui :\n• Gym (18:00)\n• Supplements"
+
+
+MONDAY = date(2026, 10, 5)
+
+
+def test_routines_lifecycle():
+    db = Database(":memory:")
+    assert execute(AddRoutine("Gym", [0, 1], time(18, 0), "fr"), db, NOW) == (
+        "🔁 Routine ajoutée : Gym — lun., mar. à 18:00"
+    )
+    execute(AddRoutine("Supplements", list(range(7)), None, "en"), db, NOW)
+    execute(AddRoutine("Run", [5, 6], None, "en"), db, NOW)
+    assert execute(ListRoutines("en"), db, NOW) == (
+        "🔁 Your routines:\n• Gym — Mon, Tue at 18:00\n• Supplements — every day\n• Run — at weekends"
+    )
+    db.check_routine(1, MONDAY)
+    assert execute(UpdateRoutine(1, "Gym", [0, 1], time(19, 0), "en"), db, NOW) == (
+        "🔁 Routine updated: Gym — Mon, Tue at 19:00"
+    )
+    assert db.is_routine_done(1, MONDAY)  # history survives the change
+    assert execute(RemoveRoutines([3], "en"), db, NOW) == "🗑️ Routine stopped:\n• Run"
+    assert execute(RemoveRoutines([3], "en"), db, NOW) == "I couldn't find that routine."
+    assert execute(UpdateRoutine(3, "Run", [5], None, "en"), db, NOW) == "I couldn't find that routine."
+
+
+def test_routines_in_lists():
+    db = Database(":memory:")
+    gym = db.add_routine("Gym", [0, 1], time(18, 0))
+    pills = db.add_routine("Supplements", list(range(7)))
+    db.add_task("Bank", due_date=MONDAY, due_at=datetime(2026, 10, 5, 9, 0, tzinfo=PARIS))
+    monday_morning = datetime(2026, 10, 5, 7, 0, tzinfo=PARIS)
+
+    # Today: tasks and routines mixed, sorted by time.
+    assert execute(list_tasks(MONDAY, MONDAY), db, monday_morning) == (
+        "📋 Still to do:\n• Bank (09:00)\n• 🔁 Gym (18:00)\n• 🔁 Supplements"
+    )
+    # Ticking off a routine counts for today only.
+    assert execute(CompleteTasks([], "en", routine_ids=[gym.id, pills.id]), db, monday_morning) == (
+        "✅ Done:\n• Gym\n• Supplements"
+    )
+    assert format_brief(db, monday_morning, "en") == "☀️ Good morning! Here's your day:\n• Bank (09:00)"
+    # Tomorrow they're back. A week view leaves out everyday routines, which would repeat on every line.
+    assert execute(list_tasks(MONDAY, date(2026, 10, 8)), db, monday_morning) == (
+        "📋 Today:\n• Bank (09:00)\n\n📋 Tomorrow:\n• 🔁 Gym (18:00)"
+    )

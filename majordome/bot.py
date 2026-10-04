@@ -166,7 +166,8 @@ async def understand_and_reply(update: Update, context: ContextTypes.DEFAULT_TYP
 
     now = owner_now(context)
     try:
-        actions = await brain.interpret(text, now, db.open_tasks(limit=50))
+        routines = [(r, db.is_routine_done(r.id, now.date())) for r in db.active_routines()]
+        actions = await brain.interpret(text, now, db.open_tasks(limit=50), routines)
         replies = [execute(action, db, now) for action in actions]
     except BrainError as error:
         log.warning("Claude failed: %s", error)
