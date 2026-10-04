@@ -8,6 +8,8 @@ Un assistant personnel qui vit dans Telegram. Parle-lui à la voix ou par écrit
 
 **[🇬🇧 English](#-english) · [🇫🇷 Français](#-français)**
 
+📖 **Detailed setup guide, no technical knowledge needed:** [English](docs/guide-en.md) · [Français](docs/guide-fr.md)
+
 ---
 
 ## 🇬🇧 English
@@ -17,6 +19,8 @@ Un assistant personnel qui vit dans Telegram. Parle-lui à la voix ou par écrit
 About **€7–10 per month**: Railway hosting (~€5) plus a few euros of AI usage (OpenAI and Anthropic). You pay these services directly; nobody else can use your bot.
 
 ### Set up your own Majordome (about 15 minutes, no coding)
+
+> First time? Follow the **[detailed step-by-step guide](docs/guide-en.md)**: it explains every click. Below is the short version.
 
 You'll need a phone with Telegram and a computer with a web browser.
 
@@ -86,6 +90,8 @@ All set in Railway's *Variables* tab. See [`.env.example`](.env.example) for the
 Environ **7 à 10 € par mois** : l'hébergement Railway (~5 €) plus quelques euros d'IA (OpenAI et Anthropic). Tu paies ces services directement ; personne d'autre ne peut utiliser ton bot.
 
 ### Installer ton propre Majordome (environ 15 minutes, sans coder)
+
+> Première fois ? Suis le **[guide détaillé pas à pas](docs/guide-fr.md)** : il explique chaque clic. Voici la version courte.
 
 Il te faut un téléphone avec Telegram et un ordinateur avec un navigateur.
 
