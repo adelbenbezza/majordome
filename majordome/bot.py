@@ -110,11 +110,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "and in the evening I check in with you.\n\n"
         "Commands: /today your day · /settings your settings · /usage what it costs",
     )))
+    config: Config = context.bot_data["config"]
+    if config.storage_is_temporary:
+        await update.effective_message.reply_text(pick(update, (
+            "⚠️ Attention : je n'ai pas de stockage permanent, tout ce que tu me dis sera effacé à la "
+            "prochaine mise à jour. Dans Railway, fais un clic droit sur le service > « Attach volume », "
+            "avec le chemin /data.",
+            "⚠️ Warning: I have no permanent storage, so everything you tell me will be erased at the next "
+            "update. In Railway, right-click the service > \"Attach volume\", with the path /data.",
+        )))
     if db.get_setting(ONBOARDED_KEY):
         return
     # First time: show the defaults and invite changes in one sentence (Claude handles it).
     db.set_setting(ONBOARDED_KEY, "1")
-    config: Config = context.bot_data["config"]
     tz = owner_timezone(config, db)
     brief, checkin = db.get_daily_time("brief"), db.get_daily_time("checkin")
     await update.effective_message.reply_text(pick(update, (

@@ -28,6 +28,11 @@ def main() -> None:
         logging.error("Configuration problem: %s", error)
         sys.exit(1)
 
+    if config.storage_is_temporary:
+        logging.warning(
+            "No volume attached: everything will be lost at the next update. In Railway, right-click "
+            "the service > Attach volume, with mount path /data."
+        )
     db = Database(config.database_path)
     logging.info(
         "Majordome starting (database: %s, dashboard: %s)",

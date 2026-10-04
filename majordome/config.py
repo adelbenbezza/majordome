@@ -26,6 +26,8 @@ class Config:
     database_path: Path
     claude_model: str
     enable_dashboard: bool
+    # Running on Railway without a volume: the database is wiped at every redeploy.
+    storage_is_temporary: bool = False
 
 
 def _default_database_path(env: dict[str, str]) -> Path:
@@ -77,6 +79,11 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         owner_telegram_id=owner,
         timezone=timezone,
         database_path=database_path,
+        # Railway always sets RAILWAY_PROJECT_ID; it sets RAILWAY_VOLUME_MOUNT_PATH only
+        # when a volume (permanent storage) is attached to the service.
+        storage_is_temporary="RAILWAY_PROJECT_ID" in env
+        and "RAILWAY_VOLUME_MOUNT_PATH" not in env
+        and "DATABASE_PATH" not in env,
         claude_model=env.get("CLAUDE_MODEL", "claude-haiku-4-5"),
         enable_dashboard=env.get("ENABLE_DASHBOARD", "false").lower() in ("true", "1", "yes"),
     )

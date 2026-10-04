@@ -51,3 +51,9 @@ def test_explicit_database_path_wins():
 @pytest.mark.parametrize("value, expected", [("true", True), ("TRUE", True), ("1", True), ("false", False), ("no", False)])
 def test_enable_dashboard(value, expected):
     assert load_config({**BASE, "ENABLE_DASHBOARD": value}).enable_dashboard is expected
+
+
+def test_detects_railway_without_a_volume():
+    assert load_config({**BASE, "RAILWAY_PROJECT_ID": "p"}).storage_is_temporary
+    assert not load_config({**BASE, "RAILWAY_PROJECT_ID": "p", "RAILWAY_VOLUME_MOUNT_PATH": "/data"}).storage_is_temporary
+    assert not load_config(dict(BASE)).storage_is_temporary  # running locally
