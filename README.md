@@ -44,6 +44,13 @@ You'll need a phone with Telegram and a computer with a web browser.
 **5. Claim your bot**
 Open your bot in Telegram (search for its username) and send `/start` **right away**. The first person to do this becomes its owner; it will ignore everyone else from then on. It should greet you. Then try "call the bank on Friday at 3pm".
 
+### Commands
+- `/today`: what's left today, with ✅ buttons
+- `/brief`: show the morning brief now
+- `/reset`: delete all tasks, routines and their history to start fresh (asks for confirmation; keeps your settings)
+
+Everything else, just say it: "call the bank on Friday at 3pm", "gym on Mondays at 6pm", "send my brief at 7:30".
+
 ### Something's wrong?
 - **The bot doesn't answer:** in Railway, open your service, then *Deployments* → *View logs*. A line starting with `ERROR` explains the problem in plain words (for example a missing or mistyped key). Fix it in the *Variables* tab; Railway restarts the bot automatically.
 - **Someone else claimed your bot:** in Railway's *Variables* tab, set `OWNER_TELEGRAM_ID` to your Telegram user ID (send any message to **@userinfobot** to find it). That always wins.
@@ -93,6 +100,13 @@ Il te faut un téléphone avec Telegram et un ordinateur avec un navigateur.
 
 **5. Deviens propriétaire de ton bot**
 Ouvre ton bot dans Telegram (cherche son nom d'utilisateur) et envoie `/start` **tout de suite**. La première personne qui le fait en devient propriétaire ; il ignorera tous les autres ensuite. Il doit te saluer. Essaie ensuite « appeler la banque vendredi à 15h ».
+
+### Commandes
+- `/today` : ce qu'il te reste aujourd'hui, avec des boutons ✅
+- `/brief` : affiche le brief du matin tout de suite
+- `/reset` : supprime toutes les tâches, routines et leur historique pour repartir de zéro (demande confirmation ; garde tes réglages)
+
+Pour tout le reste, dis-le simplement : « appeler la banque vendredi à 15h », « salle de sport le lundi à 18h », « envoie le brief à 7h30 ».
 
 ### Ça ne marche pas ?
 - **Le bot ne répond pas :** dans Railway, ouvre ton service, puis *Deployments* → *View logs*. Une ligne qui commence par `ERROR` explique le problème (par exemple une clé manquante ou mal copiée). Corrige-la dans l'onglet *Variables* ; Railway redémarre le bot tout seul.

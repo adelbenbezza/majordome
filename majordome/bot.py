@@ -1,9 +1,10 @@
 """Telegram bot: wiring, owner lock and message handlers."""
 
 import logging
+import time
 from datetime import datetime
 
-from telegram import InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -247,6 +248,11 @@ async def on_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.answer()
         return
     db: Database = context.bot_data["db"]
+    if tap.generation != db.get_generation():
+        # The list was sent before a /reset: its numbers may now point to other things.
+        await query.answer(pick(update, ("Cette liste date d'avant la remise à zéro.", "This list is from before the reset.")))
+        await query.edit_message_reply_markup(None)
+        return
     title = tick(db, tap)
     # answer() shows a short pop-up and stops the button's loading spinner.
     await query.answer(f"✅ {title}" if title else pick(update, ("Déjà fait 👍", "Already done 👍")))
@@ -265,6 +271,47 @@ async def on_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # An older day's list: just remove the tapped button.
         rows = [row for row in query.message.reply_markup.inline_keyboard if row[0].callback_data != query.data]
         await query.edit_message_reply_markup(InlineKeyboardMarkup(rows) if rows else None)
+
+
+RESET_SECONDS = 5 * 60  # how long the "Yes, delete everything" button works
+
+
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/reset: ask for confirmation before deleting all tasks, routines and history."""
+    expires = int(time.time()) + RESET_SECONDS
+    text, yes, no = pick(update, (
+        ("⚠️ Ça va supprimer toutes tes tâches, tes routines et leur historique. "
+         "Impossible de revenir en arrière.\n\nTes réglages (heure du brief, langue) sont gardés.",
+         "🗑️ Oui, tout supprimer", "Annuler"),
+        ("⚠️ This deletes all your tasks, routines and their history. It can't be undone."
+         "\n\nYour settings (brief time, language) are kept.",
+         "🗑️ Yes, delete everything", "Cancel"),
+    ))
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(yes, callback_data=f"reset:yes:{expires}")],
+        [InlineKeyboardButton(no, callback_data="reset:no")],
+    ])
+    await update.effective_message.reply_text(text, reply_markup=keyboard)
+
+
+async def on_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """A button under the /reset question was tapped."""
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split(":")
+    if parts[1] != "yes":
+        await query.edit_message_text(pick(update, ("Annulé, rien n'a été supprimé.", "Cancelled, nothing was deleted.")))
+        return
+    if len(parts) != 3 or not parts[2].isdigit() or time.time() > int(parts[2]):
+        await query.edit_message_text(pick(update, (
+            "Cette confirmation a expiré, rien n'a été supprimé. Renvoie /reset si tu veux toujours tout effacer.",
+            "This confirmation expired, nothing was deleted. Send /reset again if you still want a fresh start.",
+        )))
+        return
+    db: Database = context.bot_data["db"]
+    db.wipe_history()
+    log.info("History wiped by the owner")
+    await query.edit_message_text(pick(update, ("🗑️ Tout est effacé. On repart de zéro !", "🗑️ Everything's deleted. Fresh start!")))
 
 
 async def unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -300,7 +347,9 @@ def build_application(config: Config, db: Database) -> Application:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("today", today))
     app.add_handler(CommandHandler("brief", brief))
-    app.add_handler(CallbackQueryHandler(on_done))
+    app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CallbackQueryHandler(on_done, pattern="^done:"))
+    app.add_handler(CallbackQueryHandler(on_reset, pattern="^reset:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(~filters.COMMAND, unsupported))
