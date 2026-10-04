@@ -7,6 +7,7 @@ one, because existing databases have already run it.
 """
 
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from pathlib import Path
@@ -108,7 +109,33 @@ MIGRATIONS: list[str] = [
         seconds       REAL NOT NULL DEFAULT 0
     );
     """,
+    # 7: undo. Triggers (installed at startup, see _install_undo_triggers) write into
+    # undo_log the SQL that reverses each change, tagged with the current step (one step
+    # = one message or button tap). Logging only happens while a step is open.
+    """
+    CREATE TABLE undo_log (
+        seq  INTEGER PRIMARY KEY,
+        step INTEGER NOT NULL,
+        sql  TEXT NOT NULL
+    );
+    CREATE TABLE undo_steps (
+        step  INTEGER PRIMARY KEY,
+        label TEXT NOT NULL,
+        at    TEXT NOT NULL
+    );
+    CREATE TABLE undo_state (
+        id     INTEGER PRIMARY KEY CHECK (id = 1),
+        step   INTEGER NOT NULL,
+        active INTEGER NOT NULL
+    );
+    INSERT INTO undo_state (id, step, active) VALUES (1, 0, 0);
+    """,
 ]
+
+# Tables whose changes can be undone. Not notifications or usage: those are the bot's
+# own bookkeeping, not something the owner did.
+UNDO_TABLES = ["tasks", "routines", "routine_checks", "someday", "lists", "list_items", "settings"]
+UNDO_KEEP_STEPS = 20
 
 OWNER_KEY = "owner_telegram_id"
 # Messages sent at a time the owner can change ("HH:MM" local time, or "off"), with their
@@ -194,6 +221,10 @@ class ListItem:
     text: str
 
 
+class _Step:
+    label: str = ""
+
+
 class Database:
     def __init__(self, path: Path | str):
         if str(path) != ":memory:":
@@ -204,6 +235,7 @@ class Database:
         # WAL lets the future dashboard read while the bot writes.
         self.conn.execute("PRAGMA journal_mode = WAL")
         self.migrate()
+        self._install_undo_triggers()
 
     def migrate(self) -> None:
         current = self.conn.execute("PRAGMA user_version").fetchone()[0]
@@ -214,6 +246,86 @@ class Database:
             except sqlite3.Error:
                 self.conn.rollback()
                 raise
+
+    def _install_undo_triggers(self) -> None:
+        """(Re)create the undo triggers, matching each table's current columns.
+
+        For a change to table t, the trigger stores the SQL that reverses it:
+        an INSERT is reversed by a DELETE, a DELETE by an INSERT of the old values,
+        an UPDATE by an UPDATE back to the old values. quote() turns a value into
+        SQL text safely (strings get quotes, NULL stays NULL).
+        """
+        with self.conn:
+            for table in UNDO_TABLES:
+                columns = [row["name"] for row in self.conn.execute(f"PRAGMA table_info({table})")]
+                old_values = " || ',' || ".join(f"quote(old.{c})" for c in columns)
+                set_old = " || ',' || ".join(f"'{c}=' || quote(old.{c})" for c in columns)
+                when = "WHEN (SELECT active FROM undo_state) = 1"
+                log = "INSERT INTO undo_log (step, sql) SELECT step, {} FROM undo_state;"
+                triggers = {
+                    "insert": f"AFTER INSERT ON {table} {when} BEGIN "
+                    + log.format(f"'DELETE FROM {table} WHERE rowid = ' || new.rowid") + " END",
+                    "update": f"AFTER UPDATE ON {table} {when} BEGIN "
+                    + log.format(f"'UPDATE {table} SET ' || {set_old} || ' WHERE rowid = ' || old.rowid") + " END",
+                    "delete": f"AFTER DELETE ON {table} {when} BEGIN "
+                    + log.format(
+                        f"'INSERT INTO {table} (rowid, {', '.join(columns)}) VALUES (' || old.rowid || ',' || {old_values} || ')'"
+                    )
+                    + " END",
+                }
+                for kind, body in triggers.items():
+                    self.conn.execute(f"DROP TRIGGER IF EXISTS undo_{table}_{kind}")
+                    self.conn.execute(f"CREATE TRIGGER undo_{table}_{kind} {body}")
+
+    @contextmanager
+    def undo_step(self):
+        """Group the changes made inside `with db.undo_step() as step:` into one undo step.
+
+        Set `step.label` to describe it (shown when it's undone).
+        """
+        with self.conn:
+            self.conn.execute("UPDATE undo_state SET step = step + 1, active = 1")
+        number = self.conn.execute("SELECT step FROM undo_state").fetchone()[0]
+        step = _Step()
+        try:
+            yield step
+        finally:
+            with self.conn:
+                self.conn.execute("UPDATE undo_state SET active = 0")
+                has_changes = self.conn.execute("SELECT 1 FROM undo_log WHERE step = ? LIMIT 1", (number,)).fetchone()
+                if has_changes:
+                    self.conn.execute(
+                        "INSERT INTO undo_steps (step, label, at) VALUES (?, ?, ?)",
+                        (number, step.label[:500], utc_now().isoformat()),
+                    )
+                    # Keep only the last few steps.
+                    self.conn.execute("DELETE FROM undo_log WHERE step <= ?", (number - UNDO_KEEP_STEPS,))
+                    self.conn.execute("DELETE FROM undo_steps WHERE step <= ?", (number - UNDO_KEEP_STEPS,))
+
+    def undo_last(self) -> str | None:
+        """Reverse the most recent step (not the one in progress). Returns its label, or None."""
+        state = self.conn.execute("SELECT step, active FROM undo_state").fetchone()
+        current = state["step"] if state["active"] else None
+        row = self.conn.execute(
+            "SELECT MAX(step) FROM undo_log WHERE step IS NOT ?", (current,)
+        ).fetchone()
+        target = row[0]
+        if target is None:
+            return None
+        label_row = self.conn.execute("SELECT label FROM undo_steps WHERE step = ?", (target,)).fetchone()
+        statements = [r["sql"] for r in self.conn.execute(
+            "SELECT sql FROM undo_log WHERE step = ? ORDER BY seq DESC", (target,)
+        )]
+        with self.conn:
+            # Pause logging while reversing, or the reversal would itself be logged.
+            self.conn.execute("UPDATE undo_state SET active = 0")
+            for statement in statements:
+                self.conn.execute(statement)
+            self.conn.execute("DELETE FROM undo_log WHERE step = ?", (target,))
+            self.conn.execute("DELETE FROM undo_steps WHERE step = ?", (target,))
+            if current is not None:
+                self.conn.execute("UPDATE undo_state SET active = 1")
+        return label_row["label"] if label_row else ""
 
     @property
     def schema_version(self) -> int:
@@ -312,6 +424,9 @@ class Database:
         tell they're out of date instead of ticking off the wrong thing.
         """
         with self.conn:
+            self.conn.execute("UPDATE undo_state SET active = 0")  # a reset can't be undone
+            self.conn.execute("DELETE FROM undo_log")
+            self.conn.execute("DELETE FROM undo_steps")
             self.conn.execute("DELETE FROM list_items")
             self.conn.execute("DELETE FROM lists")
             self.conn.execute("DELETE FROM someday")
@@ -351,6 +466,23 @@ class Database:
                 "UPDATE tasks SET done_at = ? WHERE id = ? AND done_at IS NULL",
                 (utc_now().isoformat(), task_id),
             )
+        return self.get_task(task_id) if cursor.rowcount else None
+
+    def delete_task(self, task_id: int) -> Task | None:
+        """Remove a task completely (e.g. added by mistake). Returns it, or None if it doesn't exist."""
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+        with self.conn:
+            # A Someday wish turned into this task goes back on the Someday list.
+            self.conn.execute("UPDATE someday SET task_id = NULL WHERE task_id = ?", (task_id,))
+            self.conn.execute("DELETE FROM notifications WHERE kind = 'task' AND item_id = ?", (task_id,))
+            self.conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        return task
+
+    def rename_task(self, task_id: int, title: str) -> Task | None:
+        with self.conn:
+            cursor = self.conn.execute("UPDATE tasks SET title = ? WHERE id = ?", (title, task_id))
         return self.get_task(task_id) if cursor.rowcount else None
 
     def reschedule_task(self, task_id: int, due_date: date | None, due_at: datetime | None) -> Task | None:
