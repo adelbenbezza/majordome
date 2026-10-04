@@ -198,3 +198,49 @@ def test_pasted_calendar_link_is_never_sent_to_claude(monkeypatch):
     asyncio.run(bot.handle_text(update, context))
     assert replies == ["📅 Calendar connected! 1 event(s) today. I'll put them in your morning brief."]
     assert db.get_calendar_url() == link
+
+
+def test_morning_brief_with_intro_then_nudge():
+    from datetime import datetime, timedelta
+
+    from majordome.scheduler import send_brief
+
+    db = Database(":memory:")
+    db.claim_owner(42)
+    today = datetime.now(CONFIG.timezone).date()
+    bank = db.add_task("Bank", due_date=today - timedelta(days=3))
+    for back in (2, 1, 0):
+        db.reschedule_task(bank.id, today - timedelta(days=back), None)
+    sent = []
+
+    async def send_message(chat_id, text, reply_markup=None):
+        sent.append(text)
+
+    class FakeBrain:
+        async def brief_intro(self, facts, lang):
+            assert "moved to a later day 3 times" in facts
+            return "The bank call keeps slipping: do it first."
+
+    context = SimpleNamespace(
+        bot_data={"config": CONFIG, "db": db, "brain": FakeBrain()}, bot=SimpleNamespace(send_message=send_message)
+    )
+    asyncio.run(send_brief(context))
+    assert sent[0].startswith("☀️ The bank call keeps slipping: do it first.\n\n• Bank")
+    assert sent[1] == '🤔 You\'ve postponed "Bank" 3 times. What shall we do?'
+    asyncio.run(send_brief(context))
+    assert len(sent) == 3  # the nudge isn't repeated the next time
+
+
+def test_brief_without_claude_intro_still_goes_out():
+    from datetime import datetime
+
+    from majordome import scheduler
+
+    class BrokenBrain:
+        async def brief_intro(self, facts, lang):
+            return None  # what brief_intro returns on any API problem
+
+    db = Database(":memory:")
+    db.add_task("Bank")
+    text = asyncio.run(scheduler.brief_text(db, datetime.now(CONFIG.timezone), "en", BrokenBrain()))
+    assert text == "☀️ Good morning! Here's your day:\n• Bank"

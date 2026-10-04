@@ -17,12 +17,13 @@ from zoneinfo import ZoneInfo
 
 from telegram.ext import Application, ContextTypes
 
-from .actions import format_brief, format_checkin
+from .actions import brief_facts, day_items, format_brief, format_checkin
 from .calendar_feed import CalendarError, fetch_events
 from .buttons import evening_keyboard, single_keyboard, today_keyboard
 from .config import Config
 from .db import DAILY_MESSAGES, Database
 from .reminders import due_notices
+from .nudges import due_nudges, level, nudge_message
 from .review import format_review
 
 log = logging.getLogger(__name__)
@@ -46,10 +47,11 @@ def _owner_context(context: ContextTypes.DEFAULT_TYPE):
     return owner_id(config, db), db, datetime.now(owner_timezone(config, db)), db.get_language()
 
 
-async def brief_text(db: Database, now: datetime, lang: str) -> str:
-    """The brief, with today's calendar events if a calendar is linked.
+async def brief_text(db: Database, now: datetime, lang: str, brain=None) -> str:
+    """The brief, with today's calendar events if a calendar is linked, opened by a few
+    lines from Claude if `brain` is given.
 
-    A calendar problem never stops the brief: it just says the calendar couldn't be read.
+    Neither a calendar problem nor a Claude problem ever stops the brief.
     """
     url = db.get_calendar_url()
     events, failed = [], False
@@ -59,7 +61,10 @@ async def brief_text(db: Database, now: datetime, lang: str) -> str:
         except CalendarError as error:
             log.warning("Calendar failed: %s", error)
             failed = True
-    return format_brief(db, now, lang, events, calendar_failed=failed)
+    intro = None
+    if brain is not None and (events or day_items(db, now.date(), now, lang)):
+        intro = await brain.brief_intro(brief_facts(db, now, events), lang)
+    return format_brief(db, now, lang, events, calendar_failed=failed, intro=intro)
 
 
 async def send_brief(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -67,8 +72,17 @@ async def send_brief(context: ContextTypes.DEFAULT_TYPE) -> None:
     if chat_id is None:
         log.info("No owner yet, skipping the morning brief")
         return
-    text = await brief_text(db, now, lang)
+    text = await brief_text(db, now, lang, context.bot_data.get("brain"))
     await context.bot.send_message(chat_id, text, reply_markup=today_keyboard(db, now, lang))
+    await send_nudges(context.bot, chat_id, db, now, lang)
+
+
+async def send_nudges(bot, chat_id: int, db: Database, now: datetime, lang: str) -> None:
+    """After the brief: ask about tasks postponed again and again (see nudges.py)."""
+    for task in due_nudges(db, now.date()):
+        db.mark_notified("task", task.id, f"postponed-{level(task)}", "nudge")
+        text, keyboard = nudge_message(db, task, lang)
+        await bot.send_message(chat_id, text, reply_markup=keyboard)
 
 
 async def send_review(context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -47,6 +47,7 @@ Open your bot in Telegram (search for its username) and send `/start` **right aw
 ### Commands
 - `/today`: what's left today, with ✅ buttons
 - `/brief`: show the morning brief now
+- `/undo`: undo the last change (you can also just say "undo" or "annule")
 - `/settings`: your settings (brief and check-in times, reminders, timezone, quiet hours)
 - `/usage`: what the AI has cost you this month
 - `/review`: this week's review now (it also arrives on Sunday evenings)
@@ -115,6 +116,7 @@ Ouvre ton bot dans Telegram (cherche son nom d'utilisateur) et envoie `/start` *
 ### Commandes
 - `/today` : ce qu'il te reste aujourd'hui, avec des boutons ✅
 - `/brief` : affiche le brief du matin tout de suite
+- `/undo` : annule la dernière modification (tu peux aussi dire « annule »)
 - `/settings` : tes réglages (heures du brief et du point du soir, rappels, fuseau horaire, heures calmes)
 - `/usage` : ce que l'IA t'a coûté ce mois-ci
 - `/review` : le bilan de la semaine tout de suite (il arrive aussi le dimanche soir)
@@ -156,7 +158,7 @@ cp .env.example .env        # then fill in your keys (use a separate test bot!)
 .venv/bin/pytest
 ```
 
-Code lives in `majordome/`: `config.py` (environment variables), `db.py` (SQLite + migrations), `bot.py` (Telegram handlers and owner lock), `brain.py` (Claude reads the message and picks a tool), `actions.py` (Python carries out the tool call on the database), `voice.py` (Whisper transcription), `scheduler.py` (daily messages such as the morning brief, via JobQueue), `buttons.py` (✅ inline buttons), `reminders.py` (which reminders and follow-ups are due, checked every minute), `streaks.py`, `review.py` (Sunday weekly review), `calendar_feed.py` (reads an iCal link for the brief). Railway runs `python -m majordome` (see `railway.json`) and redeploys on every push to `main`.
+Code lives in `majordome/`: `config.py` (environment variables), `db.py` (SQLite + migrations), `bot.py` (Telegram handlers and owner lock), `brain.py` (Claude reads the message and picks a tool), `actions.py` (Python carries out the tool call on the database), `voice.py` (Whisper transcription), `scheduler.py` (daily messages such as the morning brief, via JobQueue), `buttons.py` (✅ inline buttons), `reminders.py` (which reminders and follow-ups are due, checked every minute), `streaks.py`, `review.py` (Sunday weekly review), `calendar_feed.py` (reads an iCal link for the brief), `memory.py` (last few exchanges, for follow-ups), `nudges.py` (tasks postponed again and again). Undo works through SQLite triggers (see `db.py`). Railway runs `python -m majordome` (see `railway.json`) and redeploys on every push to `main`.
 
 **Railway template (for the Deploy button):** create the service from this repo, attach a **volume** (any mount path; the database goes there automatically via `RAILWAY_VOLUME_MOUNT_PATH`), mark the three API keys as required variables, then publish it as a template and replace `REPLACE_ME` in the links above.
 

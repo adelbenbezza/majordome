@@ -328,3 +328,23 @@ def test_updating_a_routine_keeps_its_start_date():
     execute(AddRoutine("Ménage", [4], None, "fr", every=2, start_date=next_friday), db, NOW)
     execute(UpdateRoutine(1, "Ménage", [5], None, "fr", every=2), db, NOW)  # Saturday instead
     assert db.get_routine(1).start_date == next_friday
+
+
+def test_brief_with_intro_and_facts_for_claude():
+    from majordome.actions import brief_facts
+    from majordome.calendar_feed import Event
+
+    db = Database(":memory:")
+    db.add_task("Gym", due_date=TODAY, due_at=datetime(2026, 10, 4, 18, 0, tzinfo=PARIS))
+    bank = db.add_task("Bank", due_date=date(2026, 10, 1))
+    db.reschedule_task(bank.id, date(2026, 10, 2), None)
+    assert format_brief(db, NOW, "en", intro="Busy evening: gym at 18:00.") == (
+        "☀️ Busy evening: gym at 18:00.\n\n• Bank (Fri Oct 2)\n• Gym (18:00)"
+    )
+    events = [Event("Dentist", time(10, 0), time(11, 0))]
+    assert brief_facts(db, NOW, events).splitlines() == [
+        "Now: Sunday 2026-10-04 16:20",
+        "Calendar: 10:00–11:00 Dentist",
+        "To do: Bank (Fri Oct 2) (overdue by 2 days) (moved to a later day 1 time)",
+        "To do: Gym (18:00)",
+    ]

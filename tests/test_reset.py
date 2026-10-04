@@ -30,9 +30,10 @@ def tap(db, data):
     )
     update = SimpleNamespace(callback_query=query, effective_user=SimpleNamespace(language_code="en"))
     context = SimpleNamespace(bot_data={"config": CONFIG, "db": db})
-    from majordome.bot import on_item
+    from majordome.bot import on_item, on_nudge
 
-    handler = {"reset": on_reset, "move": on_move, "item": on_item}.get(data.split(":")[0], on_done)
+    handlers = {"reset": on_reset, "move": on_move, "item": on_item, "nudge": on_nudge}
+    handler = handlers.get(data.split(":")[0], on_done)
     asyncio.run(handler(update, context))
     return calls
 
@@ -112,3 +113,15 @@ def test_shopping_list_buttons():
     assert tap(db, "item:1:0")[0] == ("answer", "Already done 👍")
     assert format_undo(db.undo_last(), "en") == "↩️ Undone:\n✅ lait"
     assert [i.text for i in db.list_items("Courses")] == ["lait", "pain"]
+
+
+def test_nudge_button():
+    from majordome.actions import format_undo
+
+    db = Database(":memory:")
+    task = db.add_task("Bank")
+    calls = tap(db, f"nudge:someday:{task.id}:0")
+    assert calls[-1] == ("edit", "✨ Moved to Someday: Bank")
+    assert db.get_task(task.id) is None and db.open_someday()[0].title == "Bank"
+    assert format_undo(db.undo_last(), "en") == "↩️ Undone:\n✨ Moved to Someday: Bank"
+    assert db.get_task(task.id).title == "Bank" and db.open_someday() == []

@@ -513,9 +513,16 @@ def format_event(event, lang: str) -> str:
     return f"📅 {hours} {event.title}"
 
 
-def format_brief(db: Database, now: datetime, lang: str, events: list | None = None, calendar_failed: bool = False) -> str:
-    """The morning brief: today's calendar events, then everything waiting for today
-    (routines and overdue tasks included)."""
+def format_brief(
+    db: Database,
+    now: datetime,
+    lang: str,
+    events: list | None = None,
+    calendar_failed: bool = False,
+    intro: str | None = None,
+) -> str:
+    """The morning brief: an opening written by Claude (if any), today's calendar events,
+    then everything waiting for today (routines and overdue tasks included)."""
     t = TEXT[lang]
     items = day_items(db, now.date(), now, lang)
     events = events or []
@@ -525,7 +532,28 @@ def format_brief(db: Database, now: datetime, lang: str, events: list | None = N
     lines += [f"• {item.text}" for item in items]
     if not items and not events:
         return "\n".join([t["brief_empty"], *lines])
+    if intro:
+        return "\n".join([f"☀️ {intro}", "", *lines])
     return "\n".join([t["brief_hello"], *lines])
+
+
+def brief_facts(db: Database, now: datetime, events: list) -> str:
+    """Today's situation in plain English, for Claude to write the brief's opening."""
+    today = now.date()
+    lines = [f"Now: {now:%A %Y-%m-%d %H:%M}"]
+    if events:
+        lines.append("Calendar: " + "; ".join(format_event(e, "en").removeprefix("📅 ") for e in events))
+    for item in day_items(db, today, now, "en"):
+        note = ""
+        if item.kind == "task":
+            task = db.get_task(item.id)
+            if task.due_date and task.due_date < today:
+                days = (today - task.due_date).days
+                note += f" (overdue by {days} day{'s' if days > 1 else ''})"
+            if task.postponed:
+                note += f" (moved to a later day {task.postponed} time{'s' if task.postponed > 1 else ''})"
+        lines.append(f"To do: {item.text}{note}")
+    return "\n".join(lines)
 
 
 def move_task(db: Database, task: Task, day: date, now: datetime, at: time | None = None) -> Task:

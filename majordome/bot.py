@@ -36,6 +36,7 @@ from .buttons import evening_keyboard, list_keyboard, parse_callback, parse_item
 from .config import Config
 from .db import Database
 from .memory import Conversation
+from .nudges import apply_nudge, parse_nudge
 from .calendar_feed import CalendarError, fetch_events, looks_like_calendar_url
 from .review import format_review
 from .scheduler import brief_text, owner_timezone, schedule_daily, start_clock
@@ -336,7 +337,7 @@ async def brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lang = "fr" if is_french(update) else "en"
     now = owner_now(context)
     await update.effective_message.chat.send_action(ChatAction.TYPING)
-    text = await brief_text(db, now, lang)
+    text = await brief_text(db, now, lang, context.bot_data["brain"])
     await update.effective_message.reply_text(text, reply_markup=today_keyboard(db, now, lang))
 
 
@@ -469,6 +470,26 @@ async def on_item(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except BadRequest as error:
         if "not modified" not in str(error).lower():
             raise
+
+
+async def on_nudge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """A button under "You've postponed X 3 times": today, drop it, or Someday."""
+    query = update.callback_query
+    db: Database = context.bot_data["db"]
+    parsed = parse_nudge(query.data)
+    if parsed is None or parsed[2] != db.get_generation():
+        await query.answer()
+        await query.edit_message_reply_markup(None)
+        return
+    choice, task_id, _ = parsed
+    with db.undo_step() as step:
+        reply = apply_nudge(db, choice, task_id, owner_now(context).date(), db.get_language())
+        step.label = reply or ""
+    await query.answer()
+    if reply:
+        await query.edit_message_text(reply)
+    else:
+        await query.edit_message_reply_markup(None)
 
 
 async def on_move(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -609,6 +630,7 @@ def build_application(config: Config, db: Database) -> Application:
     app.add_handler(CallbackQueryHandler(on_reset, pattern="^reset:"))
     app.add_handler(CallbackQueryHandler(on_move, pattern="^move:"))
     app.add_handler(CallbackQueryHandler(on_item, pattern="^item:"))
+    app.add_handler(CallbackQueryHandler(on_nudge, pattern="^nudge:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(~filters.COMMAND, unsupported))

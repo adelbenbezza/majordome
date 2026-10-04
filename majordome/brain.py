@@ -375,6 +375,11 @@ Changes only happen through tools: never say you added, changed, deleted or undi
 If no tool fits, a completion matches no open task, or the request is too unclear, call no tool and reply in one or two short sentences, in the user's language."""
 
 
+BRIEF_PROMPT = """You write the opening lines of a morning brief in a personal assistant app. The list of the day is shown right after your text, so don't repeat it.
+
+Write in {language}, 1 to 3 short sentences, warm and practical: point out what matters today (a busy moment, something overdue or postponed several times, a gap to fit something in) and suggest one priority if it helps. Plain text only: no greeting beyond a word or two, no list, no markdown."""
+
+
 @dataclass(frozen=True)
 class NewTask:
     title: str
@@ -861,3 +866,27 @@ class Brain:
         if self.on_usage:
             self.on_usage(self.model, message.usage.input_tokens, message.usage.output_tokens)
         return parse_response(message)
+
+    async def brief_intro(self, facts: str, lang: str) -> str | None:
+        """1-3 friendly sentences to open the morning brief, from today's facts.
+
+        Optional by design: on any problem it returns None and the brief goes out
+        without it, so a Claude hiccup never costs the owner their morning list.
+        """
+        language = "French, informal (tu)" if lang == "fr" else "English"
+        try:
+            message = await self.client.messages.create(
+                model=self.model,
+                max_tokens=300,
+                system=BRIEF_PROMPT.format(language=language),
+                messages=[{"role": "user", "content": facts}],
+            )
+        except anthropic.APIError as error:
+            log.warning("Brief intro failed: %s", error)
+            return None
+        if self.on_usage:
+            self.on_usage(self.model, message.usage.input_tokens, message.usage.output_tokens)
+        text = " ".join(b.text for b in message.content if b.type == "text").strip()
+        if message.stop_reason != "end_turn" or not text:
+            return None
+        return text
