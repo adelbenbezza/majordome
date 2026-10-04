@@ -319,6 +319,8 @@ SYSTEM_PROMPT = """You are Majordome, a personal assistant in Telegram. The user
 - update_settings: morning brief time (their day's list), evening check-in time (what's left), Sunday weekly review time, how long before timed things to remind them, their timezone (where they live: "I'm in Montreal now"), quiet hours (no reminders at night). In French, « plus de brief / de rappels / d'heures calmes » means turning it off.
 - list_tasks: they ask what they have to do on a day or over a period ("what's left today?", "tomorrow?", "this week?").
 
+Earlier messages of the conversation may come first: use them to understand follow-ups ("yes", "the second one", "move it to Friday"), but only act on the last message.
+
 If no tool fits, a completion matches no open task, or the request is too unclear, call no tool and reply in one or two short sentences, in the user's language."""
 
 
@@ -660,6 +662,15 @@ def build_context(text: str, now: datetime, snapshot: Snapshot) -> str:
     return "\n".join(lines)
 
 
+def build_messages(text: str, now: datetime, snapshot: Snapshot, history: list[tuple[str, str]]) -> list[dict]:
+    """Earlier exchanges as plain text, then the new message with the current state."""
+    messages = []
+    for user, bot in history:
+        messages += [{"role": "user", "content": user}, {"role": "assistant", "content": bot}]
+    messages.append({"role": "user", "content": build_context(text, now, snapshot)})
+    return messages
+
+
 class Brain:
     def __init__(self, api_key: str, model: str, on_usage=None):
         """`on_usage(model, input_tokens, output_tokens)` is called after each request (for /usage)."""
@@ -668,7 +679,10 @@ class Brain:
         self.model = model
         self.on_usage = on_usage
 
-    async def interpret(self, text: str, now: datetime, snapshot: Snapshot) -> list[Action]:
+    async def interpret(
+        self, text: str, now: datetime, snapshot: Snapshot, history: list[tuple[str, str]] = ()
+    ) -> list[Action]:
+        """`history`: the recent (user, bot) exchanges, so follow-ups like "yes" make sense."""
         try:
             message = await self.client.messages.create(
                 model=self.model,
@@ -678,7 +692,7 @@ class Brain:
                 # "auto" lets Claude answer in words when no tool fits. It also works on every
                 # model: newer ones refuse forced tool use.
                 tool_choice={"type": "auto"},
-                messages=[{"role": "user", "content": build_context(text, now, snapshot)}],
+                messages=build_messages(text, now, snapshot, history),
             )
         except anthropic.AuthenticationError as error:
             raise BrainError("auth", str(error)) from error

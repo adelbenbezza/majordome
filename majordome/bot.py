@@ -4,9 +4,9 @@ import logging
 import time
 from datetime import datetime
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -33,6 +33,7 @@ from .brain import Brain, BrainError, ListTasks, Reply, Snapshot, UpdateSetting
 from .buttons import evening_keyboard, parse_callback, parse_move, tick, today_keyboard
 from .config import Config
 from .db import Database
+from .memory import Conversation
 from .calendar_feed import CalendarError, fetch_events, looks_like_calendar_url
 from .review import format_review
 from .scheduler import brief_text, owner_timezone, schedule_daily, start_clock
@@ -240,7 +241,8 @@ async def understand_and_reply(update: Update, context: ContextTypes.DEFAULT_TYP
     now = owner_now(context)
     keyboard = None
     try:
-        actions = await brain.interpret(text, now, take_snapshot(db, now))
+        conversation: Conversation = context.bot_data["conversation"]
+        actions = await brain.interpret(text, now, take_snapshot(db, now), conversation.recent(now))
         replies = [execute(action, db, now) for action in actions]
     except BrainError as error:
         log.warning("Claude failed: %s", error)
@@ -257,6 +259,7 @@ async def understand_and_reply(update: Update, context: ContextTypes.DEFAULT_TYP
         if any(isinstance(a, ListTasks) and a.start == a.end == now.date() for a in actions):
             keyboard = today_keyboard(db, now, db.get_language())
 
+    context.bot_data["conversation"].add(text, "\n\n".join(replies), now)
     if heard:
         replies.insert(0, f"🎙️ \"{text}\"")
     await message.reply_text("\n\n".join(replies), reply_markup=keyboard)
@@ -504,8 +507,30 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
             log.exception("Could not send the error message")
 
 
+# The menu shown when tapping "/" or the menu button in Telegram: (command, English, French).
+COMMANDS = [
+    ("today", "What's left today, with ✅ buttons", "Ce qu'il te reste aujourd'hui, avec boutons ✅"),
+    ("brief", "Your morning brief, now", "Ton brief du matin, tout de suite"),
+    ("review", "This week's review", "Le bilan de la semaine"),
+    ("settings", "Your settings and how to change them", "Tes réglages et comment les changer"),
+    ("calendar", "Show your calendar in the brief", "Afficher ton agenda dans le brief"),
+    ("usage", "What the AI costs you this month", "Ce que l'IA te coûte ce mois-ci"),
+    ("reset", "Delete everything and start fresh", "Tout effacer et repartir de zéro"),
+]
+
+
+async def set_command_menu(app: Application) -> None:
+    """Tell Telegram our commands (English by default, French for French-language apps)."""
+    try:
+        await app.bot.set_my_commands([BotCommand(name, english) for name, english, _ in COMMANDS])
+        await app.bot.set_my_commands([BotCommand(name, french) for name, _, french in COMMANDS], language_code="fr")
+    except TelegramError:
+        log.warning("Couldn't set the command menu", exc_info=True)  # cosmetic: never block startup
+
+
 def build_application(config: Config, db: Database) -> Application:
-    app = Application.builder().token(config.telegram_bot_token).build()
+    # post_init runs once the bot is connected, before it starts reading messages.
+    app = Application.builder().token(config.telegram_bot_token).post_init(set_command_menu).build()
     # bot_data is a dict shared by all handlers: a simple way to give them config and db.
     app.bot_data["config"] = config
     app.bot_data["db"] = db
@@ -515,6 +540,7 @@ def build_application(config: Config, db: Database) -> Application:
         on_usage=lambda model, tokens_in, tokens_out: db.record_usage("claude", model, tokens_in, tokens_out),
     )
     app.bot_data["transcriber"] = Transcriber(config.openai_api_key)
+    app.bot_data["conversation"] = Conversation()
 
     # Group -1 runs before the default group 0, so the lock sees every update first.
     app.add_handler(TypeHandler(Update, owner_lock), group=-1)
