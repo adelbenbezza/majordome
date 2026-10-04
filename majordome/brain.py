@@ -247,6 +247,10 @@ class Brain:
             raise BrainError("auth", str(error)) from error
         except anthropic.RateLimitError as error:
             raise BrainError("busy", str(error)) from error
+        except anthropic.BadRequestError as error:
+            # An empty credit balance comes back as a "bad request".
+            kind = "no_credit" if "credit balance" in str(error).lower() else "other"
+            raise BrainError(kind, str(error)) from error
         except anthropic.APIStatusError as error:
             kind = "busy" if error.status_code >= 500 else "other"
             raise BrainError(kind, str(error)) from error
