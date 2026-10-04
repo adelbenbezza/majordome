@@ -68,3 +68,28 @@ def test_brief_time_and_language_settings():
     assert db.get_language() == "en"
     db.set_language("fr")
     assert db.get_language() == "fr"
+
+
+def test_routines():
+    from datetime import date, time
+
+    db = Database(":memory:")
+    monday, tuesday, wednesday = date(2026, 10, 5), date(2026, 10, 6), date(2026, 10, 7)
+    gym = db.add_routine("Gym", [1, 0, 1], time(18, 0))  # duplicates and order don't matter
+    pills = db.add_routine("Supplements", list(range(7)))
+    assert gym.weekdays == (0, 1) and gym.time == time(18, 0) and not gym.daily
+    assert pills.daily and pills.time is None
+
+    assert [r.title for r in db.routines_on(monday)] == ["Gym", "Supplements"]  # timed first
+    assert [r.title for r in db.routines_on(wednesday)] == ["Supplements"]
+
+    assert db.check_routine(gym.id, monday) == gym
+    assert db.check_routine(gym.id, monday) is None  # already done that day
+    assert [r.title for r in db.routines_left(monday)] == ["Supplements"]
+    assert [r.title for r in db.routines_left(tuesday)] == ["Gym", "Supplements"]  # each day is separate
+
+    assert db.remove_routine(gym.id).title == "Gym"
+    assert db.remove_routine(gym.id) is None
+    assert [r.title for r in db.active_routines()] == ["Supplements"]
+    assert db.check_routine(gym.id, tuesday) is None  # removed routines can't be checked
+    assert db.is_routine_done(gym.id, monday)  # history is kept

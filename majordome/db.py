@@ -33,6 +33,28 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX tasks_open ON tasks (done_at, due_date);
     """,
+    # 3: routines. Each routine is a rule (which weekdays, what time), not a copy per day;
+    # routine_checks records each day it was done, which is what streaks and charts need.
+    # weekdays: "0,1" = Monday and Tuesday (Monday = 0, like Python's date.weekday()).
+    # time is the local wall-clock time ("18:00" in the owner's timezone), not UTC: it must
+    # stay 18:00 through daylight saving changes, which a fixed UTC time wouldn't.
+    # Removing a routine only sets active = 0, so its history is kept.
+    """
+    CREATE TABLE routines (
+        id         INTEGER PRIMARY KEY,
+        title      TEXT NOT NULL,
+        weekdays   TEXT NOT NULL,
+        time       TEXT,
+        active     INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE routine_checks (
+        routine_id INTEGER NOT NULL REFERENCES routines (id),
+        day        TEXT NOT NULL,
+        done_at    TEXT NOT NULL,
+        PRIMARY KEY (routine_id, day)
+    );
+    """,
 ]
 
 OWNER_KEY = "owner_telegram_id"
@@ -61,6 +83,32 @@ class Task:
             due_date=date.fromisoformat(row["due_date"]) if row["due_date"] else None,
             due_at=datetime.fromisoformat(row["due_at"]) if row["due_at"] else None,
             done_at=datetime.fromisoformat(row["done_at"]) if row["done_at"] else None,
+        )
+
+
+@dataclass(frozen=True)
+class Routine:
+    id: int
+    title: str
+    weekdays: tuple[int, ...]  # Monday = 0 ... Sunday = 6
+    time: time | None  # local wall-clock time
+    active: bool
+
+    @property
+    def daily(self) -> bool:
+        return len(self.weekdays) == 7
+
+    def happens_on(self, day: date) -> bool:
+        return day.weekday() in self.weekdays
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> "Routine":
+        return cls(
+            id=row["id"],
+            title=row["title"],
+            weekdays=tuple(int(d) for d in row["weekdays"].split(",")),
+            time=time.fromisoformat(row["time"]) if row["time"] else None,
+            active=bool(row["active"]),
         )
 
 
@@ -193,3 +241,68 @@ class Database:
             (start.isoformat(), end.isoformat()),
         ).fetchall()
         return [Task.from_row(row) for row in rows]
+
+    # --- routines ---------------------------------------------------------
+
+    def add_routine(self, title: str, weekdays: list[int], at: time | None = None) -> Routine:
+        days = ",".join(str(d) for d in sorted(set(weekdays)))
+        with self.conn:
+            cursor = self.conn.execute(
+                "INSERT INTO routines (title, weekdays, time, created_at) VALUES (?, ?, ?, ?)",
+                (title, days, at.strftime("%H:%M") if at else None, utc_now().isoformat()),
+            )
+        return self.get_routine(cursor.lastrowid)
+
+    def get_routine(self, routine_id: int) -> Routine | None:
+        row = self.conn.execute("SELECT * FROM routines WHERE id = ?", (routine_id,)).fetchone()
+        return Routine.from_row(row) if row else None
+
+    def active_routines(self) -> list[Routine]:
+        rows = self.conn.execute(
+            "SELECT * FROM routines WHERE active = 1 ORDER BY time IS NULL, time, id"
+        ).fetchall()
+        return [Routine.from_row(row) for row in rows]
+
+    def update_routine(self, routine_id: int, title: str, weekdays: list[int], at: time | None) -> Routine | None:
+        """Change an active routine in place, so its history (and future streak) is kept."""
+        days = ",".join(str(d) for d in sorted(set(weekdays)))
+        with self.conn:
+            cursor = self.conn.execute(
+                "UPDATE routines SET title = ?, weekdays = ?, time = ? WHERE id = ? AND active = 1",
+                (title, days, at.strftime("%H:%M") if at else None, routine_id),
+            )
+        return self.get_routine(routine_id) if cursor.rowcount else None
+
+    def remove_routine(self, routine_id: int) -> Routine | None:
+        """Stop a routine (its history is kept). Returns it, or None if it wasn't active."""
+        with self.conn:
+            cursor = self.conn.execute(
+                "UPDATE routines SET active = 0 WHERE id = ? AND active = 1", (routine_id,)
+            )
+        return self.get_routine(routine_id) if cursor.rowcount else None
+
+    def check_routine(self, routine_id: int, day: date) -> Routine | None:
+        """Mark a routine done for `day`. Returns it, or None if inactive or already done that day."""
+        routine = self.get_routine(routine_id)
+        if routine is None or not routine.active:
+            return None
+        with self.conn:
+            cursor = self.conn.execute(
+                "INSERT OR IGNORE INTO routine_checks (routine_id, day, done_at) VALUES (?, ?, ?)",
+                (routine_id, day.isoformat(), utc_now().isoformat()),
+            )
+        return routine if cursor.rowcount else None
+
+    def is_routine_done(self, routine_id: int, day: date) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM routine_checks WHERE routine_id = ? AND day = ?", (routine_id, day.isoformat())
+        ).fetchone()
+        return row is not None
+
+    def routines_on(self, day: date) -> list[Routine]:
+        """Active routines that happen on `day`."""
+        return [r for r in self.active_routines() if r.happens_on(day)]
+
+    def routines_left(self, day: date) -> list[Routine]:
+        """Routines that happen on `day` and aren't done yet."""
+        return [r for r in self.routines_on(day) if not self.is_routine_done(r.id, day)]
