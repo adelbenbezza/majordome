@@ -2,7 +2,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from majordome.actions import execute, format_brief, format_checkin, move_to_tomorrow
-from majordome.brain import AddRoutine, AddTasks, ListRoutines, RemoveRoutines, UpdateRoutine, CompleteTasks, ListTasks, NewTask, Reply, RescheduleTasks, SetDailyTime, SetReminders
+from majordome.brain import AddSomeday, AddToList, CheckListItems, ClearList, CloseSomeday, NewSomeday, PromoteSomeday, Show, AddRoutine, AddTasks, RemoveRoutines, UpdateRoutine, CompleteTasks, ListTasks, NewTask, Reply, RescheduleTasks, SetDailyTime, SetReminders
 from majordome.db import Database
 
 PARIS = ZoneInfo("Europe/Paris")
@@ -97,7 +97,7 @@ def test_routines_lifecycle():
     )
     execute(AddRoutine("Supplements", list(range(7)), None, "en"), db, NOW)
     execute(AddRoutine("Run", [5, 6], None, "en"), db, NOW)
-    assert execute(ListRoutines("en"), db, NOW) == (
+    assert execute(Show("routines", None, "en"), db, NOW) == (
         "🔁 Your routines:\n• Gym — Mon, Tue at 18:00\n• Supplements — every day\n• Run — at weekends"
     )
     db.check_routine(1, MONDAY)
@@ -167,3 +167,39 @@ def test_evening_check_in_and_move_to_tomorrow():
     assert [(t.title, t.due_date) for t in moved] == [("Late", TOMORROW), ("Bank", TOMORROW)]
     assert db.get_task(moved[1].id).due_at == datetime(2026, 10, 5, 13, 0, tzinfo=timezone.utc)  # same 15:00
     assert format_checkin(db, evening, "en") == "🌙 Evening check-in. Still to do:\n• 🔁 Stretch\n• Someday-ish"
+
+
+def test_someday_flow():
+    db = Database(":memory:")
+    assert execute(Show("someday", None, "en"), db, NOW).startswith("Your Someday list is empty.")
+    reply = execute(AddSomeday([NewSomeday("Read Dune", "Books"), NewSomeday("Learn guitar", "Learning")], "en"), db, NOW)
+    assert reply == "✨ Added to Someday:\n• Read Dune (Books)\n• Learn guitar (Learning)"
+    execute(AddSomeday([NewSomeday("Read Tolkien", "books")], "en"), db, NOW)
+    assert execute(Show("someday", None, "en"), db, NOW) == (
+        "✨ Someday:\n\n▸ Books\n• Read Dune\n• Read Tolkien\n\n▸ Learning\n• Learn guitar"
+    )
+    assert execute(Show("someday", "learning", "en"), db, NOW) == "✨ Someday:\n\n▸ Learning\n• Learn guitar"
+
+    saturday = date(2026, 10, 10)
+    assert execute(PromoteSomeday(2, saturday, time(10, 0), "en"), db, NOW) == (
+        "📅 From Someday to your tasks:\n• Learn guitar (Sat Oct 10, 10:00)"
+    )
+    assert [t.title for t in db.tasks_between(saturday, saturday)] == ["Learn guitar"]
+    assert execute(PromoteSomeday(2, saturday, None, "en"), db, NOW) == "I couldn't find that in your Someday list."
+    assert execute(CloseSomeday([1], True, "fr"), db, NOW) == "🎉 Bravo ! Retiré de « Un jour » :\n• Read Dune"
+    assert [i.title for i in db.open_someday()] == ["Read Tolkien"]
+
+
+def test_lists_flow():
+    db = Database(":memory:")
+    assert execute(Show("lists", None, "fr"), db, NOW).startswith("Tu n'as pas encore de liste.")
+    assert execute(AddToList("Courses", ["lait", "œufs"], "fr"), db, NOW) == "📝 Ajouté à « Courses » :\n• lait\n• œufs"
+    execute(AddToList("Idées", ["app de recettes"], "fr"), db, NOW)
+    assert execute(Show("lists", None, "fr"), db, NOW) == "📝 Tes listes :\n• Courses (2)\n• Idées (1)"
+    assert execute(Show("lists", "courses", "fr"), db, NOW) == "📝 Courses :\n• lait\n• œufs"
+    milk = db.list_items("Courses")[0]
+    assert execute(CheckListItems([milk.id], "en"), db, NOW) == "✅ Ticked off:\n• lait"
+    assert execute(CheckListItems([milk.id], "en"), db, NOW) == "I couldn't find that in your lists."
+    assert execute(ClearList("courses", "en"), db, NOW) == '🧹 "Courses" list emptied.'
+    assert execute(Show("lists", "Courses", "en"), db, NOW) == 'Your "Courses" list is empty.'
+    assert execute(ClearList("Nope", "en"), db, NOW) == 'I couldn\'t find a list called "Nope".'

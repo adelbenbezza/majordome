@@ -4,7 +4,7 @@ A personal assistant that lives in Telegram. Talk to it by voice or text, in Fre
 
 Un assistant personnel qui vit dans Telegram. Parle-lui à la voix ou par écrit, en français ou en anglais.
 
-> 🚧 **Work in progress / En construction** — for now the bot handles tasks by text or voice (add, complete, "what's left today?"), recurring routines, ✅ buttons to tick things off, a morning brief, reminders and an evening check-in. / Pour l'instant le bot gère les tâches à l'écrit ou à la voix (ajouter, cocher, « qu'est-ce qu'il me reste ? »), les routines, des boutons ✅ pour cocher, un brief le matin, des rappels et un point le soir.
+> 🚧 **Work in progress / En construction** — for now the bot handles tasks by text or voice (add, complete, "what's left today?"), recurring routines, ✅ buttons to tick things off, a morning brief, reminders, an evening check-in, a Someday list, and notes and lists. / Pour l'instant le bot gère les tâches à l'écrit ou à la voix (ajouter, cocher, « qu'est-ce qu'il me reste ? »), les routines, des boutons ✅ pour cocher, un brief le matin, des rappels, un point le soir, une liste « Un jour », et des notes et listes.
 
 **[🇬🇧 English](#-english) · [🇫🇷 Français](#-français)**
 
@@ -47,9 +47,9 @@ Open your bot in Telegram (search for its username) and send `/start` **right aw
 ### Commands
 - `/today`: what's left today, with ✅ buttons
 - `/brief`: show the morning brief now
-- `/reset`: delete all tasks, routines and their history to start fresh (asks for confirmation; keeps your settings)
+- `/reset`: delete all tasks, routines, Someday list, lists and notes to start fresh (asks for confirmation; keeps your settings)
 
-Everything else, just say it: "call the bank on Friday at 3pm", "gym on Mondays at 6pm", "send my brief at 7:30", "check in at 8:30pm", "remind me 15 minutes before".
+Everything else, just say it: "call the bank on Friday at 3pm", "gym on Mondays at 6pm", "send my brief at 7:30", "check in at 8:30pm", "remind me 15 minutes before", "one day I'd like to visit Japan", "add eggs to the shopping list".
 
 ### Something's wrong?
 - **The bot doesn't answer:** in Railway, open your service, then *Deployments* → *View logs*. A line starting with `ERROR` explains the problem in plain words (for example a missing or mistyped key). Fix it in the *Variables* tab; Railway restarts the bot automatically.
@@ -104,9 +104,9 @@ Ouvre ton bot dans Telegram (cherche son nom d'utilisateur) et envoie `/start` *
 ### Commandes
 - `/today` : ce qu'il te reste aujourd'hui, avec des boutons ✅
 - `/brief` : affiche le brief du matin tout de suite
-- `/reset` : supprime toutes les tâches, routines et leur historique pour repartir de zéro (demande confirmation ; garde tes réglages)
+- `/reset` : supprime toutes les tâches, routines, la liste « Un jour », les listes et notes pour repartir de zéro (demande confirmation ; garde tes réglages)
 
-Pour tout le reste, dis-le simplement : « appeler la banque vendredi à 15h », « salle de sport le lundi à 18h », « envoie le brief à 7h30 », « fais le point à 20h30 », « rappelle-moi 15 minutes avant ».
+Pour tout le reste, dis-le simplement : « appeler la banque vendredi à 15h », « salle de sport le lundi à 18h », « envoie le brief à 7h30 », « fais le point à 20h30 », « rappelle-moi 15 minutes avant », « un jour j'aimerais aller au Japon », « ajoute des œufs à la liste de courses ».
 
 ### Ça ne marche pas ?
 - **Le bot ne répond pas :** dans Railway, ouvre ton service, puis *Deployments* → *View logs*. Une ligne qui commence par `ERROR` explique le problème (par exemple une clé manquante ou mal copiée). Corrige-la dans l'onglet *Variables* ; Railway redémarre le bot tout seul.

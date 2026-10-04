@@ -12,13 +12,19 @@ from .brain import (
     AddRoutine,
     AddTasks,
     CompleteTasks,
-    ListRoutines,
+    AddSomeday,
+    AddToList,
+    CheckListItems,
+    ClearList,
+    CloseSomeday,
     ListTasks,
+    PromoteSomeday,
     RemoveRoutines,
     Reply,
     RescheduleTasks,
     SetDailyTime,
     SetReminders,
+    Show,
     UpdateRoutine,
 )
 from .db import Database, Routine, Task
@@ -65,6 +71,22 @@ TEXT = {
         "routine_not_found": "Je n'ai pas trouvé cette routine.",
         "routines": "🔁 Tes routines :",
         "no_routines": "Tu n'as pas encore de routine. Dis par exemple « salle de sport le lundi et le mardi à 18h ».",
+        "someday_added": "✨ Ajouté à « Un jour » :",
+        "someday": "✨ Un jour :",
+        "no_someday": "Ta liste « Un jour » est vide. Dis par exemple « un jour j'aimerais apprendre la guitare ».",
+        "someday_done": "🎉 Bravo ! Retiré de « Un jour » :",
+        "someday_dropped": "🗑️ Retiré de « Un jour » :",
+        "someday_not_found": "Je n'ai pas trouvé ça dans ta liste « Un jour ».",
+        "promoted": "📅 De « Un jour » à tes tâches :",
+        "list_added": "📝 Ajouté à « {list} » :",
+        "list": "📝 {list} :",
+        "list_empty": "Ta liste « {list} » est vide.",
+        "no_list": "Je n'ai pas trouvé de liste « {list} ».",
+        "lists": "📝 Tes listes :",
+        "no_lists": "Tu n'as pas encore de liste. Dis par exemple « ajoute du lait à la liste de courses ».",
+        "checked": "✅ Coché :",
+        "item_not_found": "Je n'ai pas trouvé ça dans tes listes.",
+        "cleared": "🧹 Liste « {list} » vidée.",
         "every_day": "tous les jours",
         "weekdays": "en semaine",
         "weekend": "le week-end",
@@ -103,6 +125,22 @@ TEXT = {
         "routine_not_found": "I couldn't find that routine.",
         "routines": "🔁 Your routines:",
         "no_routines": "You don't have any routines yet. Try \"gym on Mondays and Tuesdays at 6pm\".",
+        "someday_added": "✨ Added to Someday:",
+        "someday": "✨ Someday:",
+        "no_someday": "Your Someday list is empty. Try \"one day I'd like to learn guitar\".",
+        "someday_done": "🎉 Well done! Off your Someday list:",
+        "someday_dropped": "🗑️ Removed from Someday:",
+        "someday_not_found": "I couldn't find that in your Someday list.",
+        "promoted": "📅 From Someday to your tasks:",
+        "list_added": "📝 Added to \"{list}\":",
+        "list": "📝 {list}:",
+        "list_empty": "Your \"{list}\" list is empty.",
+        "no_list": "I couldn't find a list called \"{list}\".",
+        "lists": "📝 Your lists:",
+        "no_lists": "You don't have any lists yet. Try \"add milk to the shopping list\".",
+        "checked": "✅ Ticked off:",
+        "item_not_found": "I couldn't find that in your lists.",
+        "cleared": "🧹 \"{list}\" list emptied.",
         "every_day": "every day",
         "weekdays": "on weekdays",
         "weekend": "at weekends",
@@ -239,11 +277,42 @@ def execute(action: Action, db: Database, now: datetime) -> str:
             return t["routine_not_found"]
         return "\n".join([t["routine_removed"], *(f"• {r.title}" for r in removed)])
 
-    if isinstance(action, ListRoutines):
-        routines = db.active_routines()
-        if not routines:
-            return t["no_routines"]
-        return "\n".join([t["routines"], *(f"• {format_routine(r, lang)}" for r in routines)])
+    if isinstance(action, Show):
+        return format_show(db, action.what, action.name, lang)
+
+    if isinstance(action, AddSomeday):
+        added = [db.add_someday(item.title, item.category) for item in action.items]
+        return "\n".join([t["someday_added"], *(f"• {item.title} ({item.category})" for item in added)])
+
+    if isinstance(action, CloseSomeday):
+        closed = [item for item in (db.close_someday(i, action.done) for i in action.someday_ids) if item]
+        if not closed:
+            return t["someday_not_found"]
+        heading = t["someday_done"] if action.done else t["someday_dropped"]
+        return "\n".join([heading, *(f"• {item.title}" for item in closed)])
+
+    if isinstance(action, PromoteSomeday):
+        wish = db.get_someday(action.someday_id)
+        if wish is None:
+            return t["someday_not_found"]
+        due_at = datetime.combine(action.due_date, action.due_time, tzinfo=now.tzinfo) if action.due_time else None
+        task = db.add_task(wish.title, due_date=action.due_date, due_at=due_at)
+        db.promote_someday(wish.id, task.id)
+        return f"{t['promoted']}\n• {format_task(task, now, lang)}"
+
+    if isinstance(action, AddToList):
+        name = db.add_to_list(action.list, action.items)
+        return "\n".join([t["list_added"].format(list=name), *(f"• {item}" for item in action.items)])
+
+    if isinstance(action, CheckListItems):
+        checked = [item for item in (db.check_list_item(i) for i in action.item_ids) if item]
+        if not checked:
+            return t["item_not_found"]
+        return "\n".join([t["checked"], *(f"• {item.text}" for item in checked)])
+
+    if isinstance(action, ClearList):
+        name = db.clear_list(action.list)
+        return t["cleared"].format(list=name) if name else t["no_list"].format(list=action.list)
 
     if isinstance(action, ListTasks):
         return format_tasks(db, now, action.start, action.end, lang)
@@ -342,3 +411,41 @@ def format_checkin(db: Database, now: datetime, lang: str) -> str:
     if not items:
         return t["checkin_empty"]
     return "\n".join([t["checkin_hello"], *(f"• {item.text}" for item in items)])
+
+
+def format_show(db: Database, what: str, name: str | None, lang: str) -> str:
+    """Routines, the Someday list (optionally one category), or lists (one, or an overview)."""
+    t = TEXT[lang]
+    if what == "routines":
+        routines = db.active_routines()
+        if not routines:
+            return t["no_routines"]
+        return "\n".join([t["routines"], *(f"• {format_routine(r, lang)}" for r in routines)])
+
+    if what == "someday":
+        items = [i for i in db.open_someday() if name is None or i.category.lower() == name.lower()]
+        if not items:
+            return t["no_someday"]
+        sections, category = [t["someday"]], None
+        for item in items:  # already sorted by category
+            if item.category != category:
+                category = item.category
+                sections.append(f"\n▸ {category}")
+            sections.append(f"• {item.title}")
+        return "\n".join(sections)
+
+    if name is None:  # overview of all lists
+        names = db.list_names()
+        if not names:
+            return t["no_lists"]
+        counts = {n: 0 for n in names}
+        for item in db.list_items():
+            counts[item.list_name] += 1
+        return "\n".join([t["lists"], *(f"• {n} ({count})" for n, count in counts.items())])
+    found = db.find_list(name)
+    if found is None:
+        return t["no_list"].format(list=name)
+    items = db.list_items(found[1])
+    if not items:
+        return t["list_empty"].format(list=found[1])
+    return "\n".join([t["list"].format(list=found[1]), *(f"• {item.text}" for item in items)])

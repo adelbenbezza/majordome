@@ -19,7 +19,7 @@ from telegram.ext import (
 )
 
 from .actions import TEXT, execute, format_brief, format_checkin, format_task, format_tasks, move_to_tomorrow
-from .brain import Brain, BrainError, ListTasks, Reply, SetDailyTime
+from .brain import Brain, BrainError, ListTasks, Reply, SetDailyTime, Snapshot
 from .buttons import evening_keyboard, parse_callback, parse_move, tick, today_keyboard
 from .config import Config
 from .db import Database
@@ -75,6 +75,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "Écris-moi ou envoie un message vocal : dis-moi ce que tu as à faire (« appeler la banque vendredi à 15h »), "
             "ce que tu as fait (« j'ai pris mes compléments »), "
             "tes routines (« salle de sport le lundi et le mardi à 18h »), "
+            "tes envies sans date (« un jour j'aimerais apprendre la guitare »), "
+            "tes listes et notes (« ajoute du lait à la liste de courses »), "
             "ou demande « qu'est-ce qu'il me reste aujourd'hui ? ». /today affiche ta liste."
         )
         if brief_time:
@@ -86,6 +88,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "Write or send a voice note: tell me what you need to do (\"call the bank on Friday at 3pm\"), "
             "what you've done (\"I took my supplements\"), "
             "your routines (\"gym on Mondays and Tuesdays at 6pm\"), "
+            "wishes with no date (\"one day I'd like to learn guitar\"), "
+            "lists and notes (\"add milk to the shopping list\"), "
             "or ask \"what's left today?\". /today shows your list."
         )
         if brief_time:
@@ -156,6 +160,17 @@ def owner_now(context: ContextTypes.DEFAULT_TYPE) -> datetime:
     return datetime.now(context.bot_data["config"].timezone)
 
 
+def take_snapshot(db: Database, now: datetime) -> Snapshot:
+    """The user's open things, sent to Claude with each message (capped to keep it cheap)."""
+    return Snapshot(
+        open_tasks=db.open_tasks(limit=50),
+        routines=[(r, db.is_routine_done(r.id, now.date())) for r in db.active_routines()],
+        someday=db.open_someday(limit=60),
+        list_items=db.list_items(limit=100),
+        list_names=db.list_names(),
+    )
+
+
 def pick(update: Update, texts: tuple[str, str]) -> str:
     french, english = texts
     return french if is_french(update) else english
@@ -175,8 +190,7 @@ async def understand_and_reply(update: Update, context: ContextTypes.DEFAULT_TYP
     now = owner_now(context)
     keyboard = None
     try:
-        routines = [(r, db.is_routine_done(r.id, now.date())) for r in db.active_routines()]
-        actions = await brain.interpret(text, now, db.open_tasks(limit=50), routines)
+        actions = await brain.interpret(text, now, take_snapshot(db, now))
         replies = [execute(action, db, now) for action in actions]
     except BrainError as error:
         log.warning("Claude failed: %s", error)
@@ -317,10 +331,10 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/reset: ask for confirmation before deleting all tasks, routines and history."""
     expires = int(time.time()) + RESET_SECONDS
     text, yes, no = pick(update, (
-        ("⚠️ Ça va supprimer toutes tes tâches, tes routines et leur historique. "
+        ("⚠️ Ça va supprimer toutes tes tâches, tes routines, ta liste « Un jour », tes listes et notes, et leur historique. "
          "Impossible de revenir en arrière.\n\nTes réglages (heure du brief, langue) sont gardés.",
          "🗑️ Oui, tout supprimer", "Annuler"),
-        ("⚠️ This deletes all your tasks, routines and their history. It can't be undone."
+        ("⚠️ This deletes all your tasks, routines, Someday list, lists and notes, and their history. It can't be undone."
          "\n\nYour settings (brief time, language) are kept.",
          "🗑️ Yes, delete everything", "Cancel"),
     ))
