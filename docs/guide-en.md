@@ -165,7 +165,7 @@ ANTHROPIC_API_KEY  = sk-ant-…
 
 1. **Click this button:**
 
-   [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/REPLACE_ME)
+   [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/jeKayA)
 
 2. Railway asks you to sign in. Easiest: **Login with GitHub** if you have a GitHub account, otherwise **Login with Email** (you'll get a sign-in link by email).
 3. Choose the **Hobby** plan (about $5/month) and enter your card if asked.
@@ -179,7 +179,7 @@ ANTHROPIC_API_KEY  = sk-ant-…
    | `ANTHROPIC_API_KEY` | the Anthropic key `sk-ant-…` (step 3) |
 
    ⚠️ Be careful **not to add a space** before or after when pasting.
-   Any other boxes (such as `TIMEZONE`) are **optional**: leave them as they are.
+   Storage (where your Majordome keeps your tasks) is already set up: there's nothing else to configure.
 5. Click **Deploy**.
 6. **Wait 2–3 minutes.** Railway is installing your Majordome. You'll see a box representing your service: wait until it shows **Active** or **Success** (in green ✅).
 

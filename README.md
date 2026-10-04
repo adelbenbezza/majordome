@@ -40,7 +40,7 @@ You'll need a phone with Telegram and a computer with a web browser.
 3. Go to *API keys*, create a key and copy it. This is `ANTHROPIC_API_KEY`.
 
 **4. Deploy on Railway**
-1. Click this button: [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/REPLACE_ME)
+1. Click this button: [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/jeKayA)
 2. Create a Railway account if asked (signing in with GitHub is easiest), and choose the Hobby plan.
 3. Paste your three keys in the boxes `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, then click **Deploy**.
 4. Wait a minute or two until the service shows **Active** / **Success**.
@@ -111,7 +111,7 @@ Il te faut un téléphone avec Telegram et un ordinateur avec un navigateur.
 3. Va dans *API keys*, crée une clé et copie-la. C'est `ANTHROPIC_API_KEY`.
 
 **4. Déploie sur Railway**
-1. Clique sur ce bouton : [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/REPLACE_ME)
+1. Clique sur ce bouton : [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/jeKayA)
 2. Crée un compte Railway si on te le demande (le plus simple : se connecter avec GitHub), et choisis l'offre Hobby.
 3. Colle tes trois clés dans les cases `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY` et `ANTHROPIC_API_KEY`, puis clique sur **Deploy**.
 4. Attends une ou deux minutes que le service affiche **Active** / **Success**.
@@ -166,6 +166,6 @@ cp .env.example .env        # then fill in your keys (use a separate test bot!)
 
 Code lives in `majordome/`: `config.py` (environment variables), `db.py` (SQLite + migrations), `bot.py` (Telegram handlers and owner lock), `brain.py` (Claude reads the message and picks a tool), `actions.py` (Python carries out the tool call on the database), `voice.py` (Whisper transcription), `scheduler.py` (daily messages such as the morning brief, via JobQueue), `buttons.py` (✅ inline buttons), `reminders.py` (which reminders and follow-ups are due, checked every minute), `streaks.py`, `review.py` (Sunday weekly review), `calendar_feed.py` (reads an iCal link for the brief), `memory.py` (last few exchanges, for follow-ups), `nudges.py` (tasks postponed again and again). Undo works through SQLite triggers (see `db.py`). Railway runs `python -m majordome` (see `railway.json`) and redeploys on every push to `main`.
 
-**Railway template (for the Deploy button):** create the service from this repo, attach a **volume** (any mount path; the database goes there automatically via `RAILWAY_VOLUME_MOUNT_PATH`), mark the three API keys as required variables, then publish it as a template and replace `REPLACE_ME` in the links above.
+**Railway template (the Deploy button):** [railway.com/deploy/jeKayA](https://railway.com/deploy/jeKayA), generated from the owner's Railway project (Project Settings > Generate Template from Project). It contains the service from this repo, a volume at `/data` (the database goes there automatically via `RAILWAY_VOLUME_MOUNT_PATH`), and only the three API keys as required variables, with no values. Optional settings are left out on purpose: their defaults live in `config.py`. The repo must be public for others to deploy it. If you regenerate the template, update the link here and in `docs/`.
 
 License: [MIT](LICENSE).
