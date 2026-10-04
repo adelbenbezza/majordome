@@ -1,8 +1,8 @@
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from majordome.actions import execute
-from majordome.brain import AddTasks, CompleteTasks, ListTasks, NewTask, Reply
+from majordome.actions import execute, format_brief
+from majordome.brain import AddTasks, CompleteTasks, ListTasks, NewTask, Reply, SetBriefTime
 from majordome.db import Database
 
 PARIS = ZoneInfo("Europe/Paris")
@@ -66,3 +66,22 @@ def test_list_tomorrow_and_week():
         "📋 Demain :\n• Gym (19:00)\n• Milk\n\n"
         "📋 Ven. 9 oct. :\n• Bank (15:00)"
     )
+
+
+def test_set_brief_time():
+    db = Database(":memory:")
+    assert execute(SetBriefTime(time(7, 30), "fr"), db, NOW) == (
+        "☀️ C'est noté : ton brief arrivera chaque matin à 07:30."
+    )
+    assert db.get_brief_time() == time(7, 30)
+    execute(SetBriefTime(None, "en"), db, NOW)
+    assert db.get_brief_time() is None
+
+
+def test_brief():
+    db = Database(":memory:")
+    assert format_brief(db, NOW, "en") == "☀️ Good morning! Nothing planned today. Enjoy 🙂"
+    db.add_task("Supplements")
+    db.add_task("Gym", due_date=TODAY, due_at=datetime(2026, 10, 4, 18, 0, tzinfo=PARIS))
+    db.add_task("Tomorrow's", due_date=TOMORROW)
+    assert format_brief(db, NOW, "fr") == "☀️ Bonjour ! Au programme aujourd'hui :\n• Gym (18:00)\n• Supplements"

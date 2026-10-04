@@ -54,3 +54,17 @@ def test_complete_task_only_once():
     assert db.complete_task(task.id).done_at is not None
     assert db.complete_task(task.id) is None  # already done
     assert db.complete_task(999) is None  # doesn't exist
+
+
+def test_brief_time_and_language_settings():
+    from datetime import time
+
+    db = Database(":memory:")
+    assert db.get_brief_time() == time(8, 0)  # default
+    db.set_brief_time(time(7, 30))
+    assert db.get_brief_time() == time(7, 30)
+    db.set_brief_time(None)
+    assert db.get_brief_time() is None  # turned off
+    assert db.get_language() == "en"
+    db.set_language("fr")
+    assert db.get_language() == "fr"

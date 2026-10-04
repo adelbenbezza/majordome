@@ -8,7 +8,7 @@ one, because existing databases have already run it.
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 
 MIGRATIONS: list[str] = [
@@ -36,6 +36,9 @@ MIGRATIONS: list[str] = [
 ]
 
 OWNER_KEY = "owner_telegram_id"
+BRIEF_TIME_KEY = "brief_time"  # "HH:MM" in the owner's timezone, or "off"
+LANGUAGE_KEY = "language"  # "fr" or "en": used for messages the bot sends on its own
+DEFAULT_BRIEF_TIME = time(8, 0)
 
 
 def utc_now() -> datetime:
@@ -117,6 +120,24 @@ class Database:
                 (OWNER_KEY, str(user_id)),
             )
         return self.get_owner_id() == user_id
+
+    def get_brief_time(self) -> time | None:
+        """The morning brief time, or None if the owner turned it off."""
+        value = self.get_setting(BRIEF_TIME_KEY)
+        if value is None:
+            return DEFAULT_BRIEF_TIME
+        if value == "off":
+            return None
+        return time.fromisoformat(value)
+
+    def set_brief_time(self, value: time | None) -> None:
+        self.set_setting(BRIEF_TIME_KEY, value.strftime("%H:%M") if value else "off")
+
+    def get_language(self) -> str:
+        return self.get_setting(LANGUAGE_KEY) or "en"
+
+    def set_language(self, language: str) -> None:
+        self.set_setting(LANGUAGE_KEY, language)
 
     # --- tasks ------------------------------------------------------------
 

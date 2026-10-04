@@ -6,7 +6,7 @@ predictable and easy to test.
 
 from datetime import date, datetime, timedelta
 
-from .brain import Action, AddTasks, CompleteTasks, ListTasks, Reply
+from .brain import Action, AddTasks, CompleteTasks, ListTasks, Reply, SetBriefTime
 from .db import Database, Task
 
 WEEKDAYS = {
@@ -26,6 +26,10 @@ TEXT = {
         "nothing_left": "🎉 Rien à faire aujourd'hui !",
         "nothing_planned": "Rien de prévu pour {when}.",
         "that_period": "cette période",
+        "brief_set": "☀️ C'est noté : ton brief arrivera chaque matin à {time}.",
+        "brief_off": "🔕 C'est noté : plus de brief du matin. Dis-moi quand tu veux le réactiver.",
+        "brief_hello": "☀️ Bonjour ! Au programme aujourd'hui :",
+        "brief_empty": "☀️ Bonjour ! Rien de prévu aujourd'hui. Profite bien 🙂",
         "today": "aujourd'hui",
         "tomorrow": "demain",
     },
@@ -37,6 +41,10 @@ TEXT = {
         "nothing_left": "🎉 Nothing left for today!",
         "nothing_planned": "Nothing planned for {when}.",
         "that_period": "that period",
+        "brief_set": "☀️ Got it: your brief will arrive every morning at {time}.",
+        "brief_off": "🔕 Got it: no more morning brief. Tell me when you want it back.",
+        "brief_hello": "☀️ Good morning! Here's your day:",
+        "brief_empty": "☀️ Good morning! Nothing planned today. Enjoy 🙂",
         "today": "today",
         "tomorrow": "tomorrow",
     },
@@ -98,6 +106,13 @@ def execute(action: Action, db: Database, now: datetime) -> str:
     if isinstance(action, ListTasks):
         return format_tasks(db, now, action.start, action.end, lang)
 
+    if isinstance(action, SetBriefTime):
+        # The bot reschedules the daily job after this (see bot.py).
+        db.set_brief_time(action.time)
+        if action.time is None:
+            return t["brief_off"]
+        return t["brief_set"].format(time=f"{action.time:%H:%M}")
+
     raise TypeError(f"Unknown action {action!r}")
 
 
@@ -136,3 +151,13 @@ def format_tasks(db: Database, now: datetime, start: date, end: date, lang: str)
         lines = [heading(day), *(f"• {format_task(task, now, lang, hide_day=day)}" for task in day_tasks)]
         sections.append("\n".join(lines))
     return "\n\n".join(sections)
+
+
+def format_brief(db: Database, now: datetime, lang: str) -> str:
+    """The morning brief: everything waiting for today, overdue and undated tasks included."""
+    t = TEXT[lang]
+    today = now.date()
+    tasks = db.tasks_left(today)
+    if not tasks:
+        return t["brief_empty"]
+    return "\n".join([t["brief_hello"], *(f"• {format_task(task, now, lang, hide_day=today)}" for task in tasks)])

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from majordome.brain import AddTasks, BrainError, CompleteTasks, ListTasks, NewTask, Reply, parse_response
+from majordome.brain import AddTasks, BrainError, CompleteTasks, ListTasks, NewTask, Reply, SetBriefTime, parse_response
 
 
 def answer(*blocks, stop_reason="tool_use"):
@@ -78,3 +78,12 @@ def test_invalid_add_tasks(data):
 def test_unusable_answers(message):
     with pytest.raises(BrainError):
         parse_response(message)
+
+
+def test_set_brief_time():
+    assert parse_response(answer(tool("set_brief_time", {"time": "07:30", "language": "fr"}))) == [
+        SetBriefTime(time(7, 30), "fr")
+    ]
+    assert parse_response(answer(tool("set_brief_time", {"time": None, "language": "en"}))) == [
+        SetBriefTime(None, "en")
+    ]

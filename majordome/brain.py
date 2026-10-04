@@ -93,12 +93,27 @@ TOOLS = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "set_brief_time",
+        "description": "Change the time of the daily morning brief, or turn it off.",
+        "strict": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "time": {**NULLABLE_STRING, "description": "New time as HH:MM (24h), or null to turn the brief off."},
+                "language": LANGUAGE,
+            },
+            "required": ["time", "language"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 SYSTEM_PROMPT = """You are Majordome, a personal assistant in Telegram. The user writes in French or English, sometimes mixing both. Work out what they want and call the matching tool. One message can need several tool calls.
 
 - add_tasks: they want to do or remember something. Resolve dates and times relative to the current date and time given with the message. If no day is mentioned, due_date is null, except when a time is given: then use today, or tomorrow if that time has already passed.
 - complete_tasks: they say they did something. Match it by meaning to the open tasks listed with the message, and only use ids from that list.
+- set_brief_time: they want the morning brief (their daily task list) at another time, or not at all.
 - list_tasks: they ask what they have to do on a day or over a period ("what's left today?", "tomorrow?", "this week?").
 
 Recurring routines ("every Monday", "daily", "tous les mardis") aren't supported yet: don't add them as tasks, say in one sentence that routines are coming soon. A one-off task is fine ("gym next Monday").
@@ -133,13 +148,19 @@ class ListTasks:
 
 
 @dataclass(frozen=True)
+class SetBriefTime:
+    time: time | None  # None = brief turned off
+    language: str
+
+
+@dataclass(frozen=True)
 class Reply:
     """Claude answered in words instead of calling a tool."""
 
     text: str
 
 
-Action = AddTasks | CompleteTasks | ListTasks | Reply
+Action = AddTasks | CompleteTasks | ListTasks | SetBriefTime | Reply
 
 
 class BrainError(Exception):
@@ -194,6 +215,8 @@ def parse_tool_call(name: str, data: dict) -> Action:
         if not start or not end:
             raise BrainError("bad_answer", "list_tasks without dates")
         return ListTasks(start=min(start, end), end=max(start, end), language=_language(data))
+    if name == "set_brief_time":
+        return SetBriefTime(time=_parse_time(data.get("time")), language=_language(data))
     raise BrainError("bad_answer", f"unknown tool {name!r}")
 
 
