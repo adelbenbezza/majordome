@@ -5,7 +5,7 @@ predictable and easy to test.
 """
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from .brain import (
     Action,
@@ -16,8 +16,10 @@ from .brain import (
     ListTasks,
     RemoveRoutines,
     Reply,
+    RescheduleTasks,
+    SetDailyTime,
+    SetReminders,
     UpdateRoutine,
-    SetBriefTime,
 )
 from .db import Database, Routine, Task
 
@@ -42,6 +44,19 @@ TEXT = {
         "that_period": "cette période",
         "brief_set": "☀️ C'est noté : ton brief arrivera chaque matin à {time}.",
         "brief_off": "🔕 C'est noté : plus de brief du matin. Dis-moi quand tu veux le réactiver.",
+        "checkin_set": "🌙 C'est noté : je ferai le point chaque soir à {time}.",
+        "checkin_off": "🔕 C'est noté : plus de point du soir. Dis-moi quand tu veux le réactiver.",
+        "checkin_hello": "🌙 Petit point du soir. Il te reste :",
+        "checkin_empty": "🌙 Tout est fait pour aujourd'hui, bravo ! 🎉",
+        "move_button": "➡️ Tout reporter à demain",
+        "moved": "➡️ Reporté à demain :",
+        "rescheduled": "📅 Déplacé :",
+        "reminders_set": "⏰ C'est noté : je te préviendrai {minutes} min avant.",
+        "reminders_off": "🔕 C'est noté : plus de rappels. Dis-moi quand tu veux les réactiver.",
+        "reminder_in": "⏰ Dans {minutes} min : {item}",
+        "reminder_now": "⏰ C'est l'heure : {item}",
+        "followup": "🔁 Tu as fait « {title} » ?",
+        "done_button": "✅ Fait",
         "brief_hello": "☀️ Bonjour ! Au programme aujourd'hui :",
         "brief_empty": "☀️ Bonjour ! Rien de prévu aujourd'hui. Profite bien 🙂",
         "routine_added": "🔁 Routine ajoutée : {routine}",
@@ -67,6 +82,19 @@ TEXT = {
         "that_period": "that period",
         "brief_set": "☀️ Got it: your brief will arrive every morning at {time}.",
         "brief_off": "🔕 Got it: no more morning brief. Tell me when you want it back.",
+        "checkin_set": "🌙 Got it: I'll check in every evening at {time}.",
+        "checkin_off": "🔕 Got it: no more evening check-in. Tell me when you want it back.",
+        "checkin_hello": "🌙 Evening check-in. Still to do:",
+        "checkin_empty": "🌙 All done for today, well done! 🎉",
+        "move_button": "➡️ Move all to tomorrow",
+        "moved": "➡️ Moved to tomorrow:",
+        "rescheduled": "📅 Moved:",
+        "reminders_set": "⏰ Got it: I'll remind you {minutes} min before.",
+        "reminders_off": "🔕 Got it: no more reminders. Tell me when you want them back.",
+        "reminder_in": "⏰ In {minutes} min: {item}",
+        "reminder_now": "⏰ Time for: {item}",
+        "followup": "🔁 Did you do \"{title}\"?",
+        "done_button": "✅ Done",
         "brief_hello": "☀️ Good morning! Here's your day:",
         "brief_empty": "☀️ Good morning! Nothing planned today. Enjoy 🙂",
         "routine_added": "🔁 Routine added: {routine}",
@@ -220,12 +248,28 @@ def execute(action: Action, db: Database, now: datetime) -> str:
     if isinstance(action, ListTasks):
         return format_tasks(db, now, action.start, action.end, lang)
 
-    if isinstance(action, SetBriefTime):
+    if isinstance(action, SetDailyTime):
         # The bot reschedules the daily job after this (see bot.py).
-        db.set_brief_time(action.time)
+        db.set_daily_time(action.message, action.time)
         if action.time is None:
-            return t["brief_off"]
-        return t["brief_set"].format(time=f"{action.time:%H:%M}")
+            return t[f"{action.message}_off"]
+        return t[f"{action.message}_set"].format(time=f"{action.time:%H:%M}")
+
+    if isinstance(action, SetReminders):
+        db.set_reminder_minutes(action.minutes_before)
+        if action.minutes_before == 0:
+            return t["reminders_off"]
+        return t["reminders_set"].format(minutes=action.minutes_before)
+
+    if isinstance(action, RescheduleTasks):
+        moved = []
+        for task_id in action.task_ids:
+            task = db.get_task(task_id)
+            if task and task.done_at is None:
+                moved.append(move_task(db, task, action.due_date, now, action.due_time))
+        if not moved:
+            return t["not_found"]
+        return "\n".join([t["rescheduled"], *(f"• {format_task(task, now, lang)}" for task in moved)])
 
     raise TypeError(f"Unknown action {action!r}")
 
@@ -271,3 +315,30 @@ def format_brief(db: Database, now: datetime, lang: str) -> str:
     if not items:
         return t["brief_empty"]
     return "\n".join([t["brief_hello"], *(f"• {item.text}" for item in items)])
+
+
+def move_task(db: Database, task: Task, day: date, now: datetime, at: time | None = None) -> Task:
+    """Move a task to `day`, at time `at`, or at the same local time as before if `at` is None."""
+    if at is None and task.due_at:
+        at = task.due_at.astimezone(now.tzinfo).time()
+    due_at = datetime.combine(day, at, tzinfo=now.tzinfo) if at else None
+    return db.reschedule_task(task.id, day, due_at)
+
+
+def move_to_tomorrow(db: Database, day: date, now: datetime) -> list[Task]:
+    """Move `day`'s unfinished dated tasks (and older overdue ones) to the next day.
+
+    Undated tasks stay as they are (they show up every day anyway), and so do
+    routines (they come back on their own days).
+    """
+    tomorrow = day + timedelta(days=1)
+    return [move_task(db, task, tomorrow, now) for task in db.tasks_left(day) if task.due_date]
+
+
+def format_checkin(db: Database, now: datetime, lang: str) -> str:
+    """The evening check-in: what's still left today."""
+    t = TEXT[lang]
+    items = day_items(db, now.date(), now, lang)
+    if not items:
+        return t["checkin_empty"]
+    return "\n".join([t["checkin_hello"], *(f"• {item.text}" for item in items)])

@@ -1,8 +1,8 @@
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from majordome.actions import execute, format_brief
-from majordome.brain import AddRoutine, AddTasks, ListRoutines, RemoveRoutines, UpdateRoutine, CompleteTasks, ListTasks, NewTask, Reply, SetBriefTime
+from majordome.actions import execute, format_brief, format_checkin, move_to_tomorrow
+from majordome.brain import AddRoutine, AddTasks, ListRoutines, RemoveRoutines, UpdateRoutine, CompleteTasks, ListTasks, NewTask, Reply, RescheduleTasks, SetDailyTime, SetReminders
 from majordome.db import Database
 
 PARIS = ZoneInfo("Europe/Paris")
@@ -70,12 +70,12 @@ def test_list_tomorrow_and_week():
 
 def test_set_brief_time():
     db = Database(":memory:")
-    assert execute(SetBriefTime(time(7, 30), "fr"), db, NOW) == (
+    assert execute(SetDailyTime("brief", time(7, 30), "fr"), db, NOW) == (
         "☀️ C'est noté : ton brief arrivera chaque matin à 07:30."
     )
-    assert db.get_brief_time() == time(7, 30)
-    execute(SetBriefTime(None, "en"), db, NOW)
-    assert db.get_brief_time() is None
+    assert db.get_daily_time("brief") == time(7, 30)
+    execute(SetDailyTime("brief", None, "en"), db, NOW)
+    assert db.get_daily_time("brief") is None
 
 
 def test_brief():
@@ -130,3 +130,40 @@ def test_routines_in_lists():
     assert execute(list_tasks(MONDAY, date(2026, 10, 8)), db, monday_morning) == (
         "📋 Today:\n• Bank (09:00)\n\n📋 Tomorrow:\n• 🔁 Gym (18:00)"
     )
+
+
+def test_settings_by_conversation():
+    db = Database(":memory:")
+    assert execute(SetDailyTime("checkin", time(20, 30), "en"), db, NOW) == "🌙 Got it: I'll check in every evening at 20:30."
+    assert db.get_daily_time("checkin") == time(20, 30)
+    assert execute(SetReminders(15, "fr"), db, NOW) == "⏰ C'est noté : je te préviendrai 15 min avant."
+    assert db.get_reminder_minutes() == 15
+    execute(SetReminders(0, "en"), db, NOW)
+    assert db.get_reminder_minutes() == 0
+
+
+def test_reschedule_keeps_time_unless_given():
+    db = Database(":memory:")
+    bank = db.add_task("Bank", due_date=TODAY, due_at=datetime(2026, 10, 4, 15, 0, tzinfo=PARIS))
+    friday = date(2026, 10, 9)
+    assert execute(RescheduleTasks([bank.id], friday, None, "en"), db, NOW) == "📅 Moved:\n• Bank (Fri Oct 9, 15:00)"
+    assert execute(RescheduleTasks([bank.id], friday, time(9, 0), "en"), db, NOW) == "📅 Moved:\n• Bank (Fri Oct 9, 09:00)"
+    assert db.get_task(bank.id).due_at == datetime(2026, 10, 9, 7, 0, tzinfo=timezone.utc)
+    assert execute(RescheduleTasks([999], friday, None, "en"), db, NOW) == "I couldn't find that task in your list."
+
+
+def test_evening_check_in_and_move_to_tomorrow():
+    db = Database(":memory:")
+    evening = datetime(2026, 10, 4, 21, 0, tzinfo=PARIS)
+    assert format_checkin(db, evening, "en") == "🌙 All done for today, well done! 🎉"
+    db.add_task("Bank", due_date=TODAY, due_at=datetime(2026, 10, 4, 15, 0, tzinfo=PARIS))
+    db.add_task("Late", due_date=date(2026, 10, 1))
+    db.add_task("Someday-ish")  # undated: stays undated
+    db.add_routine("Stretch", [6])  # routines aren't moved
+    assert format_checkin(db, evening, "en") == (
+        "🌙 Evening check-in. Still to do:\n• Late (Thu Oct 1)\n• Bank (15:00)\n• 🔁 Stretch\n• Someday-ish"
+    )
+    moved = move_to_tomorrow(db, TODAY, evening)
+    assert [(t.title, t.due_date) for t in moved] == [("Late", TOMORROW), ("Bank", TOMORROW)]
+    assert db.get_task(moved[1].id).due_at == datetime(2026, 10, 5, 13, 0, tzinfo=timezone.utc)  # same 15:00
+    assert format_checkin(db, evening, "en") == "🌙 Evening check-in. Still to do:\n• 🔁 Stretch\n• Someday-ish"
