@@ -19,7 +19,8 @@ def tap(db, data):
         calls.append(("answer", text))
 
     async def edit_message_text(text, reply_markup=None):
-        calls.append(("edit", text))
+        buttons = [row[0].text for row in reply_markup.inline_keyboard] if reply_markup else []
+        calls.append(("edit", text, buttons) if buttons else ("edit", text))
 
     async def edit_message_reply_markup(reply_markup=None):
         calls.append(("buttons", reply_markup))
@@ -29,7 +30,9 @@ def tap(db, data):
     )
     update = SimpleNamespace(callback_query=query, effective_user=SimpleNamespace(language_code="en"))
     context = SimpleNamespace(bot_data={"config": CONFIG, "db": db})
-    handler = {"reset": on_reset, "move": on_move}.get(data.split(":")[0], on_done)
+    from majordome.bot import on_item
+
+    handler = {"reset": on_reset, "move": on_move, "item": on_item}.get(data.split(":")[0], on_done)
     asyncio.run(handler(update, context))
     return calls
 
@@ -91,3 +94,21 @@ def test_a_button_tap_can_be_undone():
     assert db.get_task(task.id).done_at is not None
     assert format_undo(db.undo_last(), "en") == "↩️ Undone:\n✅ Bank"
     assert db.get_task(task.id).done_at is None
+
+
+def test_shopping_list_buttons():
+    from majordome.actions import format_undo
+    from majordome.buttons import list_keyboard
+
+    db = Database(":memory:")
+    db.add_to_list("Courses", ["lait", "pain"])
+    keyboard = list_keyboard(db, "courses")
+    assert [(row[0].text, row[0].callback_data) for row in keyboard.inline_keyboard] == [
+        ("✅ lait", "item:1:0"),
+        ("✅ pain", "item:2:0"),
+    ]
+    calls = tap(db, "item:1:0")
+    assert calls == [("answer", "✅ lait"), ("edit", "📝 Courses:\n• pain", ["✅ pain"])]
+    assert tap(db, "item:1:0")[0] == ("answer", "Already done 👍")
+    assert format_undo(db.undo_last(), "en") == "↩️ Undone:\n✅ lait"
+    assert [i.text for i in db.list_items("Courses")] == ["lait", "pain"]

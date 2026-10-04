@@ -88,6 +88,25 @@ def single_keyboard(db: Database, kind: str, item_id: int, day: date, lang: str)
     return InlineKeyboardMarkup([[InlineKeyboardButton(TEXT[lang]["done_button"], callback_data=data)]])
 
 
+def list_keyboard(db: Database, list_name: str) -> InlineKeyboardMarkup | None:
+    """One ✅ button per item of a list (e.g. to tick things off while shopping)."""
+    generation = db.get_generation()
+    rows = [
+        [InlineKeyboardButton(f"✅ {item.text}", callback_data=f"item:{item.id}:{generation}")]
+        for item in db.list_items(list_name)
+    ]
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+def parse_item(data: str) -> tuple[int, int] | None:
+    """(item id, generation) from a list button's data."""
+    try:
+        prefix, item_id, generation = data.split(":")
+        return (int(item_id), int(generation)) if prefix == "item" else None
+    except ValueError:
+        return None
+
+
 def tick(db: Database, tap: Tap) -> str | None:
     """Mark the tapped item done. Returns its title, or None if it was already done or is gone."""
     if tap.kind == "task":

@@ -795,6 +795,13 @@ class Database:
     def list_names(self) -> list[str]:
         return [row["name"] for row in self.conn.execute("SELECT name FROM lists ORDER BY name COLLATE NOCASE")]
 
+    def list_name_of_item(self, item_id: int) -> str | None:
+        row = self.conn.execute(
+            "SELECT lists.name FROM list_items JOIN lists ON lists.id = list_items.list_id WHERE list_items.id = ?",
+            (item_id,),
+        ).fetchone()
+        return row[0] if row else None
+
     def check_list_item(self, item_id: int) -> ListItem | None:
         """Tick an item off its list. None if it doesn't exist or was already ticked."""
         found = [item for item in self.list_items() if item.id == item_id]

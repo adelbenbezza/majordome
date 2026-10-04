@@ -24,14 +24,15 @@ from .actions import (
     format_brief,
     format_checkin,
     format_settings,
+    format_show,
     format_task,
     format_tasks,
     format_undo,
     format_usage,
     move_to_tomorrow,
 )
-from .brain import Brain, BrainError, ListTasks, Reply, Snapshot, UpdateSetting
-from .buttons import evening_keyboard, parse_callback, parse_move, tick, today_keyboard
+from .brain import Brain, BrainError, ListTasks, Reply, Show, Snapshot, UpdateSetting
+from .buttons import evening_keyboard, list_keyboard, parse_callback, parse_item, parse_move, tick, today_keyboard
 from .config import Config
 from .db import Database
 from .memory import Conversation
@@ -239,11 +240,13 @@ def pick(update: Update, texts: tuple[str, str]) -> str:
     return french if is_french(update) else english
 
 
-async def understand_and_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, heard: bool = False) -> None:
+async def understand_and_reply(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, heard: bool = False, uncertain: bool = False
+) -> None:
     """Claude works out what's meant, then Python carries it out.
 
     `heard`: the text came from a voice note, so show it first ("🎙️ ...") to make
-    clear what was understood.
+    clear what was understood. `uncertain`: Whisper wasn't sure of some words.
     """
     message = update.effective_message
     db: Database = context.bot_data["db"]
@@ -254,7 +257,7 @@ async def understand_and_reply(update: Update, context: ContextTypes.DEFAULT_TYP
     keyboard = None
     try:
         conversation: Conversation = context.bot_data["conversation"]
-        actions = await brain.interpret(text, now, take_snapshot(db, now), conversation.recent(now))
+        actions = await brain.interpret(text, now, take_snapshot(db, now), conversation.recent(now), uncertain)
         # Everything this message changes is one undo step, labelled with the reply.
         with db.undo_step() as step:
             replies = [execute(action, db, now) for action in actions]
@@ -273,6 +276,10 @@ async def understand_and_reply(update: Update, context: ContextTypes.DEFAULT_TYP
         # "What's left today?" gets ✅ buttons, like /today.
         if any(isinstance(a, ListTasks) and a.start == a.end == now.date() for a in actions):
             keyboard = today_keyboard(db, now, db.get_language())
+        # Showing one list (e.g. the shopping list) gets a ✅ button per item.
+        shown = [a for a in actions if isinstance(a, Show) and a.what == "lists" and a.name]
+        if shown and (found := db.find_list(shown[-1].name)):
+            keyboard = list_keyboard(db, found[1])
 
     context.bot_data["conversation"].add(text, "\n\n".join(replies), now)
     if heard:
@@ -304,14 +311,14 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     audio = bytes(await telegram_file.download_as_bytearray())
     filename = getattr(media, "file_name", None) or "voice.ogg"
     try:
-        text = await transcriber.transcribe(audio, filename)
-        context.bot_data["db"].record_usage("whisper", transcriber.model, seconds=media.duration or 0)
+        transcript = await transcriber.transcribe(audio, filename)
+        context.bot_data["db"].record_usage("whisper", transcriber.model, seconds=transcript.seconds or media.duration or 0)
     except VoiceError as error:
         log.warning("Transcription failed: %s", error)
         await message.reply_text(pick(update, VOICE_ERRORS.get(error.kind, VOICE_ERROR_DEFAULT)))
         return
 
-    await understand_and_reply(update, context, text, heard=True)
+    await understand_and_reply(update, context, transcript.text, heard=True, uncertain=transcript.uncertain)
 
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -436,6 +443,31 @@ async def refresh(query, db: Database, now: datetime, evening: bool = False, pre
         await query.edit_message_text(prefix + text, reply_markup=keyboard)
     except BadRequest as error:
         if "not modified" not in str(error).lower():  # same text twice is fine
+            raise
+
+
+async def on_item(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """A ✅ button under a list (e.g. shopping): tick the item off, then refresh the list."""
+    query = update.callback_query
+    db: Database = context.bot_data["db"]
+    parsed = parse_item(query.data)
+    if parsed is None or parsed[1] != db.get_generation():
+        await query.answer()
+        await query.edit_message_reply_markup(None)
+        return
+    item_id = parsed[0]
+    list_name = db.list_name_of_item(item_id)
+    with db.undo_step() as step:
+        item = db.check_list_item(item_id)
+        step.label = f"✅ {item.text}" if item else ""
+    await query.answer(f"✅ {item.text}" if item else pick(update, ("Déjà fait 👍", "Already done 👍")))
+    if list_name is None:
+        return
+    text = format_show(db, "lists", list_name, db.get_language(), owner_now(context))
+    try:
+        await query.edit_message_text(text, reply_markup=list_keyboard(db, list_name))
+    except BadRequest as error:
+        if "not modified" not in str(error).lower():
             raise
 
 
@@ -576,6 +608,7 @@ def build_application(config: Config, db: Database) -> Application:
     app.add_handler(CallbackQueryHandler(on_done, pattern="^done:"))
     app.add_handler(CallbackQueryHandler(on_reset, pattern="^reset:"))
     app.add_handler(CallbackQueryHandler(on_move, pattern="^move:"))
+    app.add_handler(CallbackQueryHandler(on_item, pattern="^item:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(~filters.COMMAND, unsupported))
