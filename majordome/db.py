@@ -140,6 +140,10 @@ MIGRATIONS: list[str] = [
     ALTER TABLE routines ADD COLUMN month_day INTEGER;
     ALTER TABLE routines ADD COLUMN start_date TEXT;
     """,
+    # 9: how many times each task was pushed to a later day (to spot procrastination).
+    """
+    ALTER TABLE tasks ADD COLUMN postponed INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 # Tables whose changes can be undone. Not notifications or usage: those are the bot's
@@ -172,6 +176,7 @@ class Task:
     due_at: datetime | None  # UTC
     done_at: datetime | None  # UTC
     created_at: datetime | None = None  # UTC
+    postponed: int = 0  # times moved to a later day
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Task":
@@ -182,6 +187,7 @@ class Task:
             due_at=datetime.fromisoformat(row["due_at"]) if row["due_at"] else None,
             done_at=datetime.fromisoformat(row["done_at"]) if row["done_at"] else None,
             created_at=datetime.fromisoformat(row["created_at"]),
+            postponed=row["postponed"],
         )
 
 
@@ -540,17 +546,26 @@ class Database:
             self.conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         return task
 
+    def reset_postponed(self, task_id: int) -> None:
+        with self.conn:
+            self.conn.execute("UPDATE tasks SET postponed = 0 WHERE id = ?", (task_id,))
+
     def rename_task(self, task_id: int, title: str) -> Task | None:
         with self.conn:
             cursor = self.conn.execute("UPDATE tasks SET title = ? WHERE id = ?", (title, task_id))
         return self.get_task(task_id) if cursor.rowcount else None
 
     def reschedule_task(self, task_id: int, due_date: date | None, due_at: datetime | None) -> Task | None:
-        """Give an open task a new day (and time). Returns it, or None if it's done or gone."""
+        """Give an open task a new day (and time). Returns it, or None if it's done or gone.
+
+        Moving it to a later day counts as postponing it once more.
+        """
         with self.conn:
             cursor = self.conn.execute(
-                "UPDATE tasks SET due_date = ?, due_at = ? WHERE id = ? AND done_at IS NULL",
+                "UPDATE tasks SET postponed = postponed + (due_date IS NOT NULL AND ? > due_date), "
+                "due_date = ?, due_at = ? WHERE id = ? AND done_at IS NULL",
                 (
+                    due_date.isoformat() if due_date else None,
                     due_date.isoformat() if due_date else None,
                     due_at.astimezone(timezone.utc).isoformat() if due_at else None,
                     task_id,

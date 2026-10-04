@@ -214,3 +214,16 @@ def test_repeat_patterns():
     # Older routines (no start date) keep repeating every week, as before.
     gym = db.add_routine("Gym", [0, 1])
     assert gym.unit == "week" and gym.every == 1 and gym.happens_on(date(2020, 1, 6))
+
+
+def test_postponing_is_counted():
+    from datetime import date
+
+    db = Database(":memory:")
+    task = db.add_task("Bank", due_date=date(2026, 10, 5))
+    db.reschedule_task(task.id, date(2026, 10, 6), None)  # later: +1
+    db.reschedule_task(task.id, date(2026, 10, 8), None)  # later: +1
+    db.reschedule_task(task.id, date(2026, 10, 7), None)  # earlier: no change
+    assert db.get_task(task.id).postponed == 2
+    db.reset_postponed(task.id)
+    assert db.get_task(task.id).postponed == 0
