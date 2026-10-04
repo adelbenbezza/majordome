@@ -1,8 +1,10 @@
 """Telegram bot: wiring, owner lock and message handlers."""
 
 import logging
+from datetime import datetime
 
 from telegram import Update
+from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -13,6 +15,8 @@ from telegram.ext import (
     filters,
 )
 
+from .actions import execute, format_today
+from .brain import Brain, BrainError
 from .config import Config
 from .db import Database
 
@@ -57,14 +61,83 @@ async def owner_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_french(update):
-        text = "Bonjour, je suis Majordome 🎩 Je suis prêt. Envoie-moi un message ou une note vocale."
+        text = (
+            "Bonjour, je suis Majordome 🎩\n\n"
+            "Dis-moi ce que tu as à faire (« appeler la banque vendredi à 15h »), "
+            "ce que tu as fait (« j'ai pris mes compléments »), "
+            "ou demande « qu'est-ce qu'il me reste aujourd'hui ? ». /today affiche ta liste."
+        )
     else:
-        text = "Hello, I'm Majordome 🎩 I'm ready. Send me a message or a voice note."
+        text = (
+            "Hello, I'm Majordome 🎩\n\n"
+            "Tell me what you need to do (\"call the bank on Friday at 3pm\"), "
+            "what you've done (\"I took my supplements\"), "
+            "or ask \"what's left today?\". /today shows your list."
+        )
     await update.effective_message.reply_text(text)
 
 
-async def received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text("Reçu ✅" if is_french(update) else "Received ✅")
+BRAIN_ERRORS = {
+    "auth": (
+        "Ma clé Anthropic est refusée. Vérifie ANTHROPIC_API_KEY dans Railway.",
+        "My Anthropic key was rejected. Check ANTHROPIC_API_KEY in Railway.",
+    ),
+    "busy": (
+        "Claude est surchargé en ce moment. Réessaie dans une minute.",
+        "Claude is overloaded right now. Please try again in a minute.",
+    ),
+    "network": (
+        "Je n'arrive pas à joindre Claude. Réessaie dans un instant.",
+        "I can't reach Claude right now. Please try again in a moment.",
+    ),
+    "refused": (
+        "Je ne peux pas t'aider avec ça.",
+        "I can't help with that one.",
+    ),
+}
+BRAIN_ERROR_DEFAULT = (
+    "Je n'ai pas bien compris. Tu peux reformuler ?",
+    "I didn't quite get that. Could you rephrase?",
+)
+
+
+def owner_now(context: ContextTypes.DEFAULT_TYPE) -> datetime:
+    return datetime.now(context.bot_data["config"].timezone)
+
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Text message: Claude works out what's meant, then Python carries it out."""
+    message = update.effective_message
+    db: Database = context.bot_data["db"]
+    brain: Brain = context.bot_data["brain"]
+    await message.chat.send_action(ChatAction.TYPING)
+
+    now = owner_now(context)
+    try:
+        actions = await brain.interpret(message.text, now, db.open_tasks(limit=50))
+    except BrainError as error:
+        log.warning("Claude failed: %s", error)
+        french, english = BRAIN_ERRORS.get(error.kind, BRAIN_ERROR_DEFAULT)
+        await message.reply_text(french if is_french(update) else english)
+        return
+
+    replies = [execute(action, db, now) for action in actions]
+    await message.reply_text("\n\n".join(replies))
+
+
+async def today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/today: same as asking "what's left today?", without calling Claude."""
+    db: Database = context.bot_data["db"]
+    lang = "fr" if is_french(update) else "en"
+    await update.effective_message.reply_text(format_today(db, owner_now(context), lang))
+
+
+async def unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if is_french(update):
+        text = "Pour l'instant je ne comprends que les messages texte."
+    else:
+        text = "For now I can only read text messages."
+    await update.effective_message.reply_text(text)
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -87,10 +160,13 @@ def build_application(config: Config, db: Database) -> Application:
     # bot_data is a dict shared by all handlers: a simple way to give them config and db.
     app.bot_data["config"] = config
     app.bot_data["db"] = db
+    app.bot_data["brain"] = Brain(config.anthropic_api_key, config.claude_model)
 
     # Group -1 runs before the default group 0, so the lock sees every update first.
     app.add_handler(TypeHandler(Update, owner_lock), group=-1)
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, received))
+    app.add_handler(CommandHandler("today", today))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(~filters.COMMAND, unsupported))
     app.add_error_handler(on_error)
     return app

@@ -4,7 +4,7 @@ A personal assistant that lives in Telegram. Talk to it by voice or text, in Fre
 
 Un assistant personnel qui vit dans Telegram. Parle-lui à la voix ou par écrit, en français ou en anglais.
 
-> 🚧 **Work in progress / En construction** — for now the bot only replies "Received". / Pour l'instant le bot répond seulement « Reçu ».
+> 🚧 **Work in progress / En construction** — for now the bot handles tasks by text (add, complete, "what's left today?"). / Pour l'instant le bot gère les tâches par écrit (ajouter, cocher, « qu'est-ce qu'il me reste ? »).
 
 **[🇬🇧 English](#-english) · [🇫🇷 Français](#-français)**
 
@@ -42,7 +42,7 @@ You'll need a phone with Telegram and a computer with a web browser.
 4. Wait a minute or two until the service shows **Active** / **Success**.
 
 **5. Claim your bot**
-Open your bot in Telegram (search for its username) and send `/start` **right away**. The first person to do this becomes its owner; it will ignore everyone else from then on. It should greet you, and answer "Received ✅" to anything you send.
+Open your bot in Telegram (search for its username) and send `/start` **right away**. The first person to do this becomes its owner; it will ignore everyone else from then on. It should greet you. Then try "call the bank on Friday at 3pm".
 
 ### Something's wrong?
 - **The bot doesn't answer:** in Railway, open your service, then *Deployments* → *View logs*. A line starting with `ERROR` explains the problem in plain words (for example a missing or mistyped key). Fix it in the *Variables* tab; Railway restarts the bot automatically.
@@ -92,7 +92,7 @@ Il te faut un téléphone avec Telegram et un ordinateur avec un navigateur.
 4. Attends une ou deux minutes que le service affiche **Active** / **Success**.
 
 **5. Deviens propriétaire de ton bot**
-Ouvre ton bot dans Telegram (cherche son nom d'utilisateur) et envoie `/start` **tout de suite**. La première personne qui le fait en devient propriétaire ; il ignorera tous les autres ensuite. Il doit te saluer, et répondre « Reçu ✅ » à tout ce que tu envoies.
+Ouvre ton bot dans Telegram (cherche son nom d'utilisateur) et envoie `/start` **tout de suite**. La première personne qui le fait en devient propriétaire ; il ignorera tous les autres ensuite. Il doit te saluer. Essaie ensuite « appeler la banque vendredi à 15h ».
 
 ### Ça ne marche pas ?
 - **Le bot ne répond pas :** dans Railway, ouvre ton service, puis *Deployments* → *View logs*. Une ligne qui commence par `ERROR` explique le problème (par exemple une clé manquante ou mal copiée). Corrige-la dans l'onglet *Variables* ; Railway redémarre le bot tout seul.
@@ -120,7 +120,7 @@ cp .env.example .env        # then fill in your keys (use a separate test bot!)
 .venv/bin/pytest
 ```
 
-Code lives in `majordome/`: `config.py` (environment variables), `db.py` (SQLite + migrations), `bot.py` (Telegram handlers and owner lock). Railway runs `python -m majordome` (see `railway.json`) and redeploys on every push to `main`.
+Code lives in `majordome/`: `config.py` (environment variables), `db.py` (SQLite + migrations), `bot.py` (Telegram handlers and owner lock), `brain.py` (Claude reads the message and picks a tool), `actions.py` (Python carries out the tool call on the database). Railway runs `python -m majordome` (see `railway.json`) and redeploys on every push to `main`.
 
 **Railway template (for the Deploy button):** create the service from this repo, attach a **volume** (any mount path; the database goes there automatically via `RAILWAY_VOLUME_MOUNT_PATH`), mark the three API keys as required variables, then publish it as a template and replace `REPLACE_ME` in the links above.
 
