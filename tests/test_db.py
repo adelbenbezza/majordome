@@ -114,3 +114,42 @@ def test_wipe_history_keeps_owner_and_settings():
     assert db.get_generation() == 1
     db.wipe_history()
     assert db.get_generation() == 2
+
+
+def test_someday():
+    db = Database(":memory:")
+    dune = db.add_someday("Read Dune", "Books")
+    guitar = db.add_someday("Learn guitar", "Learning")
+    tolkien = db.add_someday("Read Tolkien", "books")  # same category, other spelling
+    assert tolkien.category == "Books"
+    assert [(i.title, i.category) for i in db.open_someday()] == [
+        ("Read Dune", "Books"), ("Read Tolkien", "Books"), ("Learn guitar", "Learning")
+    ]
+    task = db.add_task("Read Dune")
+    assert db.promote_someday(dune.id, task.id) == dune
+    assert db.close_someday(guitar.id, done=True) == guitar
+    assert db.close_someday(guitar.id, done=False) is None  # already off the list
+    assert [i.title for i in db.open_someday()] == ["Read Tolkien"]
+
+
+def test_lists():
+    db = Database(":memory:")
+    assert db.add_to_list("Courses", ["lait", "œufs"]) == "Courses"
+    assert db.add_to_list("courses", ["pain"]) == "Courses"  # same list, any case
+    db.add_to_list("Idées", ["app de recettes"])
+    assert db.list_names() == ["Courses", "Idées"]
+    assert [i.text for i in db.list_items("COURSES")] == ["lait", "œufs", "pain"]
+    milk = db.list_items("Courses")[0]
+    assert db.check_list_item(milk.id) == milk
+    assert db.check_list_item(milk.id) is None
+    assert db.clear_list("courses") == "Courses"
+    assert db.list_items("Courses") == [] and [i.text for i in db.list_items()] == ["app de recettes"]
+    assert db.clear_list("Nope") is None
+
+
+def test_wipe_includes_someday_and_lists():
+    db = Database(":memory:")
+    db.add_someday("Read Dune", "Books")
+    db.add_to_list("Courses", ["lait"])
+    db.wipe_history()
+    assert db.open_someday() == [] and db.list_names() == []

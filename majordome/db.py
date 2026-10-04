@@ -68,6 +68,32 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY (kind, item_id, slot, type)
     );
     """,
+    # 5: the Someday list (wishes without a date, grouped by category) and named lists
+    # (shopping list, ideas, notes...). A Someday wish leaves the list when it's done,
+    # dropped, or promoted to a dated task (task_id says which one).
+    """
+    CREATE TABLE someday (
+        id         INTEGER PRIMARY KEY,
+        title      TEXT NOT NULL,
+        category   TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        done_at    TEXT,
+        dropped_at TEXT,
+        task_id    INTEGER REFERENCES tasks (id)
+    );
+    CREATE TABLE lists (
+        id         INTEGER PRIMARY KEY,
+        name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE list_items (
+        id         INTEGER PRIMARY KEY,
+        list_id    INTEGER NOT NULL REFERENCES lists (id),
+        text       TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        done_at    TEXT
+    );
+    """,
 ]
 
 OWNER_KEY = "owner_telegram_id"
@@ -131,6 +157,24 @@ class Routine:
             active=bool(row["active"]),
             created_at=datetime.fromisoformat(row["created_at"]),
         )
+
+
+@dataclass(frozen=True)
+class SomedayItem:
+    id: int
+    title: str
+    category: str
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> "SomedayItem":
+        return cls(id=row["id"], title=row["title"], category=row["category"])
+
+
+@dataclass(frozen=True)
+class ListItem:
+    id: int
+    list_name: str
+    text: str
 
 
 class Database:
@@ -221,13 +265,16 @@ class Database:
         return int(self.get_setting(GENERATION_KEY) or 0)
 
     def wipe_history(self) -> None:
-        """Delete all tasks, routines and their history. The owner and settings are kept.
+        """Delete all tasks, routines, Someday wishes, lists and history. Owner and settings are kept.
 
         After this, SQLite starts numbering from 1 again, so a new task can get the
         number of a deleted one. Bumping the generation lets ✅ buttons on older messages
         tell they're out of date instead of ticking off the wrong thing.
         """
         with self.conn:
+            self.conn.execute("DELETE FROM list_items")
+            self.conn.execute("DELETE FROM lists")
+            self.conn.execute("DELETE FROM someday")
             self.conn.execute("DELETE FROM notifications")
             self.conn.execute("DELETE FROM routine_checks")
             self.conn.execute("DELETE FROM routines")
@@ -396,3 +443,111 @@ class Database:
             (kind, item_id, slot, type_),
         ).fetchone()
         return row is not None
+
+    # --- someday ----------------------------------------------------------
+
+    def add_someday(self, title: str, category: str) -> SomedayItem:
+        # Reuse an existing category's spelling ("books" -> "Books") so groups don't split.
+        existing = {c.lower(): c for c in self.someday_categories()}
+        category = existing.get(category.strip().lower(), category.strip())
+        with self.conn:
+            cursor = self.conn.execute(
+                "INSERT INTO someday (title, category, created_at) VALUES (?, ?, ?)",
+                (title, category, utc_now().isoformat()),
+            )
+        return SomedayItem(cursor.lastrowid, title, category)
+
+    def open_someday(self, limit: int = 200) -> list[SomedayItem]:
+        rows = self.conn.execute(
+            "SELECT * FROM someday WHERE done_at IS NULL AND dropped_at IS NULL AND task_id IS NULL "
+            "ORDER BY category COLLATE NOCASE, id LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [SomedayItem.from_row(row) for row in rows]
+
+    def someday_categories(self) -> list[str]:
+        rows = self.conn.execute("SELECT DISTINCT category FROM someday ORDER BY category COLLATE NOCASE").fetchall()
+        return [row["category"] for row in rows]
+
+    def close_someday(self, someday_id: int, done: bool) -> SomedayItem | None:
+        """Take a wish off the list, as achieved (done) or no longer wanted. None if not open."""
+        column = "done_at" if done else "dropped_at"
+        return self._close_someday(someday_id, f"{column} = ?", (utc_now().isoformat(),))
+
+    def promote_someday(self, someday_id: int, task_id: int) -> SomedayItem | None:
+        """Record that a wish became a dated task. None if it wasn't open."""
+        return self._close_someday(someday_id, "task_id = ?", (task_id,))
+
+    def get_someday(self, someday_id: int) -> SomedayItem | None:
+        row = self.conn.execute(
+            "SELECT * FROM someday WHERE id = ? AND done_at IS NULL AND dropped_at IS NULL AND task_id IS NULL",
+            (someday_id,),
+        ).fetchone()
+        return SomedayItem.from_row(row) if row else None
+
+    def _close_someday(self, someday_id: int, assignment: str, values: tuple) -> SomedayItem | None:
+        item = self.get_someday(someday_id)
+        if item is None:
+            return None
+        with self.conn:
+            self.conn.execute(f"UPDATE someday SET {assignment} WHERE id = ?", (*values, someday_id))
+        return item
+
+    # --- lists ------------------------------------------------------------
+
+    def find_list(self, name: str) -> tuple[int, str] | None:
+        """(id, name as saved) of the list called `name`, ignoring case."""
+        row = self.conn.execute("SELECT id, name FROM lists WHERE name = ?", (name.strip(),)).fetchone()
+        return (row["id"], row["name"]) if row else None
+
+    def add_to_list(self, name: str, texts: list[str]) -> str:
+        """Add items to a list, creating it if needed. Returns the list's name as saved."""
+        found = self.find_list(name)
+        with self.conn:
+            if found is None:
+                cursor = self.conn.execute(
+                    "INSERT INTO lists (name, created_at) VALUES (?, ?)", (name.strip(), utc_now().isoformat())
+                )
+                found = (cursor.lastrowid, name.strip())
+            self.conn.executemany(
+                "INSERT INTO list_items (list_id, text, created_at) VALUES (?, ?, ?)",
+                [(found[0], text, utc_now().isoformat()) for text in texts],
+            )
+        return found[1]
+
+    def list_items(self, name: str | None = None, limit: int = 500) -> list[ListItem]:
+        """Items not yet ticked off, of one list or of all lists."""
+        sql = (
+            "SELECT list_items.id, lists.name, list_items.text FROM list_items "
+            "JOIN lists ON lists.id = list_items.list_id WHERE list_items.done_at IS NULL"
+        )
+        params: tuple = ()
+        if name is not None:
+            sql += " AND lists.name = ?"
+            params = (name.strip(),)
+        rows = self.conn.execute(sql + " ORDER BY lists.name COLLATE NOCASE, list_items.id LIMIT ?", (*params, limit)).fetchall()
+        return [ListItem(row[0], row[1], row[2]) for row in rows]
+
+    def list_names(self) -> list[str]:
+        return [row["name"] for row in self.conn.execute("SELECT name FROM lists ORDER BY name COLLATE NOCASE")]
+
+    def check_list_item(self, item_id: int) -> ListItem | None:
+        """Tick an item off its list. None if it doesn't exist or was already ticked."""
+        found = [item for item in self.list_items() if item.id == item_id]
+        if not found:
+            return None
+        with self.conn:
+            self.conn.execute("UPDATE list_items SET done_at = ? WHERE id = ?", (utc_now().isoformat(), item_id))
+        return found[0]
+
+    def clear_list(self, name: str) -> str | None:
+        """Tick off every item of a list. Returns the list's name, or None if there's no such list."""
+        found = self.find_list(name)
+        if found is None:
+            return None
+        with self.conn:
+            self.conn.execute(
+                "UPDATE list_items SET done_at = ? WHERE list_id = ? AND done_at IS NULL",
+                (utc_now().isoformat(), found[0]),
+            )
+        return found[1]
