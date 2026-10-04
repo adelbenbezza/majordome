@@ -368,6 +368,8 @@ SYSTEM_PROMPT = """You are Majordome, a personal assistant in Telegram. The user
 
 The recent conversation may come first, for context only: use it to understand follow-ups ("yes", "the second one", "move it to Friday"), but only act on the new <message>.
 
+A message marked as an uncertain voice transcription may contain misheard words. If it doesn't clearly make sense, don't act: say in one sentence what you understood and ask them to confirm or repeat.
+
 Changes only happen through tools: never say you added, changed, deleted or undid something without calling the tool that does it. "Annule" / "undo" always means calling undo.
 
 If no tool fits, a completion matches no open task, or the request is too unclear, call no tool and reply in one or two short sentences, in the user's language."""
@@ -768,7 +770,7 @@ def describe_repeat(routine: Routine) -> str:
     return days if routine.every == 1 else f"every {routine.every} weeks on {days}{since}"
 
 
-def build_context(text: str, now: datetime, snapshot: Snapshot) -> str:
+def build_context(text: str, now: datetime, snapshot: Snapshot, uncertain: bool = False) -> str:
     """The user turn: current time, the user's open things (to match by number), then the message."""
     lines = [f"Now: {now:%A %Y-%m-%d %H:%M} ({now.tzinfo})", "Open tasks:"]
     for task in snapshot.open_tasks:
@@ -792,17 +794,21 @@ def build_context(text: str, now: datetime, snapshot: Snapshot) -> str:
     lines.append("Lists: " + (", ".join(snapshot.list_names) or "(none)"))
     for item in snapshot.list_items:
         lines.append(f"l{item.id} {item.text} [{item.list_name}]")
+    if uncertain:
+        lines.append("(Uncertain voice transcription: some words may be misheard.)")
     lines.append(f"<message>\n{text}\n</message>")
     return "\n".join(lines)
 
 
-def build_messages(text: str, now: datetime, snapshot: Snapshot, history: list[tuple[str, str]]) -> list[dict]:
+def build_messages(
+    text: str, now: datetime, snapshot: Snapshot, history: list[tuple[str, str]], uncertain: bool = False
+) -> list[dict]:
     """One user message: the recent conversation as a transcript, then the state and new message.
 
     The history is a labelled transcript rather than earlier assistant turns: given its
     "own" past confirmations, Claude tended to imitate them in words instead of calling tools.
     """
-    context = build_context(text, now, snapshot)
+    context = build_context(text, now, snapshot, uncertain)
     if history:
         transcript = "\n".join(f"User: {user}\nBot: {bot}" for user, bot in history)
         context = f"<recent_conversation>\n{transcript}\n</recent_conversation>\n{context}"
@@ -818,9 +824,15 @@ class Brain:
         self.on_usage = on_usage
 
     async def interpret(
-        self, text: str, now: datetime, snapshot: Snapshot, history: list[tuple[str, str]] = ()
+        self,
+        text: str,
+        now: datetime,
+        snapshot: Snapshot,
+        history: list[tuple[str, str]] = (),
+        uncertain: bool = False,
     ) -> list[Action]:
-        """`history`: the recent (user, bot) exchanges, so follow-ups like "yes" make sense."""
+        """`history`: the recent (user, bot) exchanges, so follow-ups like "yes" make sense.
+        `uncertain`: the text is a voice transcription that may contain misheard words."""
         try:
             message = await self.client.messages.create(
                 model=self.model,
@@ -830,7 +842,7 @@ class Brain:
                 # "auto" lets Claude answer in words when no tool fits. It also works on every
                 # model: newer ones refuse forced tool use.
                 tool_choice={"type": "auto"},
-                messages=build_messages(text, now, snapshot, history),
+                messages=build_messages(text, now, snapshot, history, uncertain),
             )
         except anthropic.AuthenticationError as error:
             raise BrainError("auth", str(error)) from error

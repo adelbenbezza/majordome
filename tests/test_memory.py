@@ -31,3 +31,9 @@ def test_command_menu_fits_telegram_rules():
     for name, english, french in COMMANDS:
         assert re.fullmatch(r"[a-z0-9_]{1,32}", name)
         assert 3 <= len(english) <= 256 and 3 <= len(french) <= 256
+
+
+def test_uncertain_voice_notes_are_marked_for_claude():
+    content = build_messages("appeler Blanche", T0, Snapshot(), [], uncertain=True)[0]["content"]
+    assert "(Uncertain voice transcription: some words may be misheard.)\n<message>" in content
+    assert "Uncertain" not in build_messages("appeler Blanche", T0, Snapshot(), [])[0]["content"]

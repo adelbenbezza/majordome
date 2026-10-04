@@ -4,6 +4,7 @@ The language is never forced: Whisper detects it, so French, English or a mix al
 """
 
 import logging
+from dataclasses import dataclass
 
 import openai
 
@@ -12,6 +13,22 @@ log = logging.getLogger(__name__)
 # Whisper costs about $0.006 per minute. A cap stops a long recording by mistake from
 # costing much, and Telegram only lets bots download files up to 20 MB anyway.
 MAX_SECONDS = 10 * 60
+
+
+# Whisper scores each piece of audio with avg_logprob: 0 = certain, lower = less sure.
+# Whisper itself treats a piece below -1.0 as a failed attempt, so we use the same line.
+UNCERTAIN_BELOW = -1.0
+
+
+@dataclass(frozen=True)
+class Transcript:
+    text: str
+    uncertain: bool  # some of it may be misheard
+    seconds: float
+
+
+def is_uncertain(segments) -> bool:
+    return any(segment.avg_logprob < UNCERTAIN_BELOW for segment in segments or [])
 
 
 class VoiceError(Exception):
@@ -27,10 +44,13 @@ class Transcriber:
         self.client = openai.AsyncOpenAI(api_key=api_key, timeout=60.0, max_retries=2)
         self.model = model
 
-    async def transcribe(self, audio: bytes, filename: str = "voice.ogg") -> str:
+    async def transcribe(self, audio: bytes, filename: str = "voice.ogg") -> Transcript:
         try:
             # The filename tells OpenAI the audio format (Telegram voice notes are .ogg).
-            result = await self.client.audio.transcriptions.create(model=self.model, file=(filename, audio))
+            # verbose_json adds a confidence score for each piece of the audio.
+            result = await self.client.audio.transcriptions.create(
+                model=self.model, file=(filename, audio), response_format="verbose_json"
+            )
         except openai.AuthenticationError as error:
             raise VoiceError("auth", str(error)) from error
         except openai.RateLimitError as error:
@@ -46,4 +66,4 @@ class Transcriber:
         text = result.text.strip()
         if not text:
             raise VoiceError("empty")
-        return text
+        return Transcript(text, is_uncertain(result.segments), float(result.duration or 0))
