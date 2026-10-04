@@ -223,15 +223,17 @@ def test_settings_overview():
     db.set_daily_time("checkin", None)
     db.set_quiet_hours((time(22, 0), time(7, 0)))
     lines = format_settings(db, "Europe/Paris", "claude-haiku-4-5", "en").splitlines()
-    assert lines[:9] == [
+    assert lines[:11] == [
         "⚙️ Your settings",
         "",
         "• Language: I reply in the language you write in",
         "• Timezone: Europe/Paris",
         "• Morning brief: 08:00",
         "• Evening check-in: off",
+        "• Weekly review: Sundays at 19:00",
         "• Reminders: 30 min before",
         "• Quiet hours: from 22:00 to 07:00",
+        "• Calendar: not connected (/calendar to link it)",
         "• AI model: claude-haiku-4-5 (set in Railway)",
     ]
 
@@ -250,3 +252,30 @@ def test_usage_report():
     assert "• Claude (some-future-model): 1 messages, ≈ unknown price" in lines
     assert "• Voice notes: 10.0 min, ≈ $0.06" in lines
     assert "AI total: ≈ $0.51" in lines
+
+
+def test_brief_with_calendar_events():
+    from majordome.calendar_feed import Event
+
+    db = Database(":memory:")
+    db.add_task("Gym", due_date=TODAY, due_at=datetime(2026, 10, 4, 18, 0, tzinfo=PARIS))
+    events = [Event("Mum's birthday", None, None), Event("Dentist", time(10, 0), time(11, 0))]
+    assert format_brief(db, NOW, "en", events) == (
+        "☀️ Good morning! Here's your day:\n"
+        "📅 Mum's birthday (all day)\n"
+        "📅 10:00–11:00 Dentist\n"
+        "• Gym (18:00)"
+    )
+    # A calendar problem never stops the brief.
+    assert format_brief(db, NOW, "fr", calendar_failed=True) == (
+        "☀️ Bonjour ! Au programme aujourd'hui :\n📅 (je n'ai pas pu lire ton agenda aujourd'hui)\n• Gym (18:00)"
+    )
+
+
+def test_ticking_off_a_routine_shows_the_streak():
+    db = Database(":memory:")
+    pills = db.add_routine("Supplements", list(range(7)))
+    db.check_routine(pills.id, TODAY - timedelta(days=1))
+    db.check_routine(pills.id, TODAY - timedelta(days=2))
+    assert execute(CompleteTasks([], "fr", routine_ids=[pills.id]), db, NOW) == "✅ Fait :\n• Supplements 🔥 3 d'affilée"
+    assert execute(Show("routines", None, "en"), db, NOW) == "🔁 Your routines:\n• Supplements — every day 🔥 3 in a row"

@@ -33,7 +33,9 @@ from .brain import Brain, BrainError, ListTasks, Reply, Snapshot, UpdateSetting
 from .buttons import evening_keyboard, parse_callback, parse_move, tick, today_keyboard
 from .config import Config
 from .db import Database
-from .scheduler import owner_timezone, schedule_daily, start_clock
+from .calendar_feed import CalendarError, fetch_events, looks_like_calendar_url
+from .review import format_review
+from .scheduler import brief_text, owner_timezone, schedule_daily, start_clock
 from .voice import MAX_SECONDS, Transcriber, VoiceError
 
 log = logging.getLogger(__name__)
@@ -205,7 +207,7 @@ def owner_now(context: ContextTypes.DEFAULT_TYPE) -> datetime:
     return datetime.now(owner_timezone(context.bot_data["config"], context.bot_data["db"]))
 
 
-RESCHEDULING_SETTINGS = {"brief_time", "checkin_time", "timezone"}
+RESCHEDULING_SETTINGS = {"brief_time", "checkin_time", "review_time", "timezone"}
 
 
 def take_snapshot(db: Database, now: datetime) -> Snapshot:
@@ -261,7 +263,12 @@ async def understand_and_reply(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await understand_and_reply(update, context, update.effective_message.text)
+    text = update.effective_message.text
+    if looks_like_calendar_url(text):
+        # A pasted calendar link is secret: handle it here, without sending it to Claude.
+        await link_calendar(update, context, text.strip())
+        return
+    await understand_and_reply(update, context, text)
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -303,7 +310,69 @@ async def brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db: Database = context.bot_data["db"]
     lang = "fr" if is_french(update) else "en"
     now = owner_now(context)
-    await update.effective_message.reply_text(format_brief(db, now, lang), reply_markup=today_keyboard(db, now, lang))
+    await update.effective_message.chat.send_action(ChatAction.TYPING)
+    text = await brief_text(db, now, lang)
+    await update.effective_message.reply_text(text, reply_markup=today_keyboard(db, now, lang))
+
+
+async def review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/review: show this week's review now."""
+    db: Database = context.bot_data["db"]
+    lang = "fr" if is_french(update) else "en"
+    await update.effective_message.reply_text(format_review(db, owner_now(context), lang))
+
+
+CALENDAR_HELP = (
+    "📅 Pour voir ton agenda dans le brief du matin :\n\n"
+    "1. Ouvre Google Agenda sur un ordinateur (calendar.google.com).\n"
+    "2. Clique sur ⚙️ > Paramètres, puis sur ton agenda dans la colonne de gauche.\n"
+    "3. Descends jusqu'à « Adresse secrète au format iCal » et copie-la.\n"
+    "4. Colle-la ici, dans la conversation.\n\n"
+    "Ce lien est secret : il permet seulement de lire ton agenda. Je ne le montre à personne, "
+    "et tu peux le déconnecter avec /calendar off.",
+    "📅 To see your calendar in the morning brief:\n\n"
+    "1. Open Google Calendar on a computer (calendar.google.com).\n"
+    "2. Click ⚙️ > Settings, then your calendar in the left column.\n"
+    "3. Scroll to \"Secret address in iCal format\" and copy it.\n"
+    "4. Paste it here, in the chat.\n\n"
+    "This link is secret: it only lets me read your calendar. I don't show it to anyone, "
+    "and you can disconnect it with /calendar off.",
+)
+
+
+async def calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/calendar: how to link a calendar; /calendar <link> to link it; /calendar off to unlink."""
+    db: Database = context.bot_data["db"]
+    argument = " ".join(context.args or []).strip()
+    if argument.lower() in ("off", "stop", "non"):
+        db.set_calendar_url(None)
+        await update.effective_message.reply_text(pick(update, ("📅 Agenda déconnecté.", "📅 Calendar disconnected.")))
+    elif argument:
+        await link_calendar(update, context, argument)
+    else:
+        await update.effective_message.reply_text(pick(update, CALENDAR_HELP))
+
+
+async def link_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str) -> None:
+    """Check the calendar link works, then save it. The link is secret: it never goes to Claude."""
+    db: Database = context.bot_data["db"]
+    message = update.effective_message
+    await message.chat.send_action(ChatAction.TYPING)
+    now = owner_now(context)
+    try:
+        events = await fetch_events(url, now.date(), now.tzinfo)
+    except CalendarError as error:
+        log.warning("Calendar link rejected: %s", error)
+        await message.reply_text(pick(update, (
+            "Je n'arrive pas à lire cet agenda. Vérifie que c'est bien l'« adresse secrète au format iCal » (/calendar pour l'aide).",
+            "I can't read that calendar. Check it's the \"secret address in iCal format\" (/calendar for help).",
+        )))
+        return
+    db.set_calendar_url(url)
+    await message.reply_text(pick(update, (
+        f"📅 Agenda connecté ! {len(events)} événement(s) aujourd'hui. Je les mettrai dans ton brief du matin.",
+        f"📅 Calendar connected! {len(events)} event(s) today. I'll put them in your morning brief.",
+    )))
 
 
 async def on_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -455,6 +524,8 @@ def build_application(config: Config, db: Database) -> Application:
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("settings", settings))
     app.add_handler(CommandHandler("usage", usage))
+    app.add_handler(CommandHandler("review", review))
+    app.add_handler(CommandHandler("calendar", calendar))
     app.add_handler(CallbackQueryHandler(on_done, pattern="^done:"))
     app.add_handler(CallbackQueryHandler(on_reset, pattern="^reset:"))
     app.add_handler(CallbackQueryHandler(on_move, pattern="^move:"))

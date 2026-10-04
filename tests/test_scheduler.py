@@ -140,3 +140,61 @@ def test_setup_message_only_on_first_start():
     assert "Fuseau horaire : Europe/Paris" in sent[1]
     asyncio.run(start(update, context))
     assert len(sent) == 3  # just the welcome the second time
+
+
+def test_weekly_review_only_on_sundays():
+    db = Database(":memory:")
+    app = make_app(db)
+    schedule_daily(app)
+    [review] = brief_jobs(app, "review")
+    # APScheduler's day_of_week counts from Monday: "sun" is what JobQueue's 0 becomes.
+    assert str(review.job.trigger.fields[4]) == "sun"
+    assert (str(review.job.trigger.fields[5]), str(review.job.trigger.fields[6])) == ("19", "0")
+    [brief] = brief_jobs(app)
+    assert str(brief.job.trigger.fields[4]) in ("*", "mon-sun", "sun,mon,tue,wed,thu,fri,sat")
+
+
+def test_brief_survives_a_broken_calendar(monkeypatch):
+    from datetime import datetime
+
+    from majordome import scheduler
+    from majordome.calendar_feed import CalendarError
+
+    async def broken(url, day, tz):
+        raise CalendarError("download failed")
+
+    monkeypatch.setattr(scheduler, "fetch_events", broken)
+    db = Database(":memory:")
+    db.set_calendar_url("https://example.com/cal.ics")
+    text = asyncio.run(scheduler.brief_text(db, datetime.now(CONFIG.timezone), "en"))
+    assert "📅 (I couldn't read your calendar today)" in text
+
+
+def test_pasted_calendar_link_is_never_sent_to_claude(monkeypatch):
+    from majordome import bot
+    from majordome.calendar_feed import Event
+
+    async def fake_fetch(url, day, tz):
+        return [Event("Dentist", None, None)]
+
+    class NoClaude:
+        async def interpret(self, *args):
+            raise AssertionError("the secret link reached Claude")
+
+    monkeypatch.setattr(bot, "fetch_events", fake_fetch)
+    db = Database(":memory:")
+    replies = []
+
+    async def reply_text(text, **kwargs):
+        replies.append(text)
+
+    async def send_action(action):
+        pass
+
+    link = "https://calendar.google.com/calendar/ical/me%40gmail.com/private-abc/basic.ics"
+    message = SimpleNamespace(text=link, reply_text=reply_text, chat=SimpleNamespace(send_action=send_action))
+    update = SimpleNamespace(effective_message=message, effective_user=SimpleNamespace(language_code="en"))
+    context = SimpleNamespace(bot_data={"config": CONFIG, "db": db, "brain": NoClaude()})
+    asyncio.run(bot.handle_text(update, context))
+    assert replies == ["📅 Calendar connected! 1 event(s) today. I'll put them in your morning brief."]
+    assert db.get_calendar_url() == link

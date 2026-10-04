@@ -4,7 +4,7 @@ A personal assistant that lives in Telegram. Talk to it by voice or text, in Fre
 
 Un assistant personnel qui vit dans Telegram. Parle-lui à la voix ou par écrit, en français ou en anglais.
 
-> 🚧 **Work in progress / En construction** — for now the bot handles tasks by text or voice (add, complete, "what's left today?"), recurring routines, ✅ buttons to tick things off, a morning brief, reminders, an evening check-in, a Someday list, and notes and lists. / Pour l'instant le bot gère les tâches à l'écrit ou à la voix (ajouter, cocher, « qu'est-ce qu'il me reste ? »), les routines, des boutons ✅ pour cocher, un brief le matin, des rappels, un point le soir, une liste « Un jour », et des notes et listes.
+> **Lite edition** (the Telegram bot) is complete: tasks, routines with streaks, reminders, morning brief with your calendar, evening check-in, weekly review, Someday list, notes and lists. A web dashboard (Full edition) is coming. / **L'édition Lite** (le bot Telegram) est complète. Un tableau de bord web (édition Full) arrive.
 
 **[🇬🇧 English](#-english) · [🇫🇷 Français](#-français)**
 
@@ -49,9 +49,18 @@ Open your bot in Telegram (search for its username) and send `/start` **right aw
 - `/brief`: show the morning brief now
 - `/settings`: your settings (brief and check-in times, reminders, timezone, quiet hours)
 - `/usage`: what the AI has cost you this month
+- `/review`: this week's review now (it also arrives on Sunday evenings)
+- `/calendar`: show your Google Calendar events in the morning brief (see below)
 - `/reset`: delete all tasks, routines, Someday list, lists and notes to start fresh (asks for confirmation; keeps your settings)
 
 Everything else, just say it: "call the bank on Friday at 3pm", "gym on Mondays at 6pm", "send my brief at 7:30", "check in at 8:30pm", "remind me 15 minutes before", "one day I'd like to visit Japan", "add eggs to the shopping list".
+
+### Add your Google Calendar (optional)
+1. On a computer, open [Google Calendar](https://calendar.google.com), click ⚙️ > **Settings**, then your calendar in the left column.
+2. Scroll to **"Secret address in iCal format"** and copy it.
+3. Paste it into the chat with your bot. It replies "Calendar connected!".
+
+The link only lets the bot read your calendar, and it is never sent to the AI. `/calendar off` disconnects it. Apple and Outlook calendars work too, with their iCal link.
 
 ### Something's wrong?
 - **The bot doesn't answer:** in Railway, open your service, then *Deployments* → *View logs*. A line starting with `ERROR` explains the problem in plain words (for example a missing or mistyped key). Fix it in the *Variables* tab; Railway restarts the bot automatically.
@@ -108,9 +117,18 @@ Ouvre ton bot dans Telegram (cherche son nom d'utilisateur) et envoie `/start` *
 - `/brief` : affiche le brief du matin tout de suite
 - `/settings` : tes réglages (heures du brief et du point du soir, rappels, fuseau horaire, heures calmes)
 - `/usage` : ce que l'IA t'a coûté ce mois-ci
+- `/review` : le bilan de la semaine tout de suite (il arrive aussi le dimanche soir)
+- `/calendar` : affiche ton agenda Google dans le brief du matin (voir plus bas)
 - `/reset` : supprime toutes les tâches, routines, la liste « Un jour », les listes et notes pour repartir de zéro (demande confirmation ; garde tes réglages)
 
 Pour tout le reste, dis-le simplement : « appeler la banque vendredi à 15h », « salle de sport le lundi à 18h », « envoie le brief à 7h30 », « fais le point à 20h30 », « rappelle-moi 15 minutes avant », « un jour j'aimerais aller au Japon », « ajoute des œufs à la liste de courses ».
+
+### Ajouter ton agenda Google (facultatif)
+1. Sur un ordinateur, ouvre [Google Agenda](https://calendar.google.com), clique sur ⚙️ > **Paramètres**, puis sur ton agenda dans la colonne de gauche.
+2. Descends jusqu'à **« Adresse secrète au format iCal »** et copie-la.
+3. Colle-la dans la conversation avec ton bot. Il répond « Agenda connecté ! ».
+
+Ce lien permet seulement au bot de lire ton agenda, et il n'est jamais envoyé à l'IA. `/calendar off` le déconnecte. Les agendas Apple et Outlook marchent aussi, avec leur lien iCal.
 
 ### Ça ne marche pas ?
 - **Le bot ne répond pas :** dans Railway, ouvre ton service, puis *Deployments* → *View logs*. Une ligne qui commence par `ERROR` explique le problème (par exemple une clé manquante ou mal copiée). Corrige-la dans l'onglet *Variables* ; Railway redémarre le bot tout seul.
@@ -138,7 +156,7 @@ cp .env.example .env        # then fill in your keys (use a separate test bot!)
 .venv/bin/pytest
 ```
 
-Code lives in `majordome/`: `config.py` (environment variables), `db.py` (SQLite + migrations), `bot.py` (Telegram handlers and owner lock), `brain.py` (Claude reads the message and picks a tool), `actions.py` (Python carries out the tool call on the database), `voice.py` (Whisper transcription), `scheduler.py` (daily messages such as the morning brief, via JobQueue), `buttons.py` (✅ inline buttons), `reminders.py` (which reminders and follow-ups are due, checked every minute). Railway runs `python -m majordome` (see `railway.json`) and redeploys on every push to `main`.
+Code lives in `majordome/`: `config.py` (environment variables), `db.py` (SQLite + migrations), `bot.py` (Telegram handlers and owner lock), `brain.py` (Claude reads the message and picks a tool), `actions.py` (Python carries out the tool call on the database), `voice.py` (Whisper transcription), `scheduler.py` (daily messages such as the morning brief, via JobQueue), `buttons.py` (✅ inline buttons), `reminders.py` (which reminders and follow-ups are due, checked every minute), `streaks.py`, `review.py` (Sunday weekly review), `calendar_feed.py` (reads an iCal link for the brief). Railway runs `python -m majordome` (see `railway.json`) and redeploys on every push to `main`.
 
 **Railway template (for the Deploy button):** create the service from this repo, attach a **volume** (any mount path; the database goes there automatically via `RAILWAY_VOLUME_MOUNT_PATH`), mark the three API keys as required variables, then publish it as a template and replace `REPLACE_ME` in the links above.
 

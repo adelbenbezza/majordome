@@ -16,6 +16,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .actions import TEXT, day_items
 from .db import Database
+from .streaks import streak_text
 
 PREFIX = "done"
 KINDS = {"t": "task", "r": "routine"}
@@ -93,4 +94,4 @@ def tick(db: Database, tap: Tap) -> str | None:
         task = db.complete_task(tap.id)
         return task.title if task else None
     routine = db.check_routine(tap.id, tap.day)
-    return routine.title if routine else None
+    return routine.title + streak_text(db, routine, tap.day, db.get_language()) if routine else None

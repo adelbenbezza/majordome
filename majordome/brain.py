@@ -261,12 +261,12 @@ TOOLS = [
             "properties": {
                 "setting": {
                     "type": "string",
-                    "enum": ["brief_time", "checkin_time", "reminder_minutes", "timezone", "quiet_hours"],
+                    "enum": ["brief_time", "checkin_time", "review_time", "reminder_minutes", "timezone", "quiet_hours"],
                 },
                 "value": {
                     **NULLABLE_STRING,
                     "description": (
-                        "brief_time / checkin_time: HH:MM, or null to turn it off. "
+                        "brief_time / checkin_time / review_time (Sunday weekly review): HH:MM, or null to turn it off. "
                         "reminder_minutes: minutes before timed things, \"0\" = no reminders. "
                         "timezone: IANA name for where they live, e.g. America/Montreal. "
                         "quiet_hours: HH:MM-HH:MM (no reminders in between), or null to turn off."
@@ -314,9 +314,9 @@ SYSTEM_PROMPT = """You are Majordome, a personal assistant in Telegram. The user
 - remove_routines: they want to stop a routine.
 - add_someday: the Someday list (called « Un jour » in French) holds wishes with no date or deadline ("I'd like to learn guitar one day", "livre à lire : Dune"). close_someday when one is achieved or dropped, promote_someday to plan it on a day.
 - add_to_list: shopping items, ideas, notes to keep ("note : ...", "add milk"). Notes and ideas go in a list such as "Notes" or "Idées". check_list_items when bought or done, clear_list to empty a list.
-- show: their routines, Someday list, or lists and notes.
+- show: their routines (with their streaks: use it for any streak question), Someday list, or lists and notes.
 - reschedule_tasks: move existing tasks to another day or time ("move the bank to Friday").
-- update_settings: morning brief time (their day's list), evening check-in time (what's left), how long before timed things to remind them, their timezone (where they live: "I'm in Montreal now"), quiet hours (no reminders at night). In French, « plus de brief / de rappels / d'heures calmes » means turning it off.
+- update_settings: morning brief time (their day's list), evening check-in time (what's left), Sunday weekly review time, how long before timed things to remind them, their timezone (where they live: "I'm in Montreal now"), quiet hours (no reminders at night). In French, « plus de brief / de rappels / d'heures calmes » means turning it off.
 - list_tasks: they ask what they have to do on a day or over a period ("what's left today?", "tomorrow?", "this week?").
 
 If no tool fits, a completion matches no open task, or the request is too unclear, call no tool and reply in one or two short sentences, in the user's language."""
@@ -488,7 +488,7 @@ def _ids(value) -> list[int]:
 def _setting_value(setting: str, value: str | None) -> object:
     """Check and convert a settings value sent by Claude (see the update_settings tool)."""
     value = value.strip() if isinstance(value, str) else None
-    if setting in ("brief_time", "checkin_time"):
+    if setting in ("brief_time", "checkin_time", "review_time"):
         return _parse_time(value)
     if setting == "reminder_minutes":
         return max(0, int(value or 0))

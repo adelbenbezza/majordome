@@ -18,10 +18,12 @@ from zoneinfo import ZoneInfo
 from telegram.ext import Application, ContextTypes
 
 from .actions import format_brief, format_checkin
+from .calendar_feed import CalendarError, fetch_events
 from .buttons import evening_keyboard, single_keyboard, today_keyboard
 from .config import Config
 from .db import DAILY_MESSAGES, Database
 from .reminders import due_notices
+from .review import format_review
 
 log = logging.getLogger(__name__)
 
@@ -44,12 +46,36 @@ def _owner_context(context: ContextTypes.DEFAULT_TYPE):
     return owner_id(config, db), db, datetime.now(owner_timezone(config, db)), db.get_language()
 
 
+async def brief_text(db: Database, now: datetime, lang: str) -> str:
+    """The brief, with today's calendar events if a calendar is linked.
+
+    A calendar problem never stops the brief: it just says the calendar couldn't be read.
+    """
+    url = db.get_calendar_url()
+    events, failed = [], False
+    if url:
+        try:
+            events = await fetch_events(url, now.date(), now.tzinfo)
+        except CalendarError as error:
+            log.warning("Calendar failed: %s", error)
+            failed = True
+    return format_brief(db, now, lang, events, calendar_failed=failed)
+
+
 async def send_brief(context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id, db, now, lang = _owner_context(context)
     if chat_id is None:
         log.info("No owner yet, skipping the morning brief")
         return
-    await context.bot.send_message(chat_id, format_brief(db, now, lang), reply_markup=today_keyboard(db, now, lang))
+    text = await brief_text(db, now, lang)
+    await context.bot.send_message(chat_id, text, reply_markup=today_keyboard(db, now, lang))
+
+
+async def send_review(context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id, db, now, lang = _owner_context(context)
+    if chat_id is None:
+        return
+    await context.bot.send_message(chat_id, format_review(db, now, lang))
 
 
 async def send_checkin(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -72,7 +98,11 @@ async def clock(context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.send_message(chat_id, notice.text, reply_markup=keyboard)
 
 
-DAILY_SENDERS = {"brief": send_brief, "checkin": send_checkin}
+DAILY_SENDERS = {"brief": send_brief, "checkin": send_checkin, "review": send_review}
+# Which days each message goes out. Careful: JobQueue counts 0 = Sunday ... 6 = Saturday,
+# unlike Python's date.weekday() (0 = Monday).
+EVERY_DAY = tuple(range(7))
+SEND_DAYS = {"brief": EVERY_DAY, "checkin": EVERY_DAY, "review": (0,)}
 
 
 def schedule_daily(app: Application) -> None:
@@ -89,7 +119,7 @@ def schedule_daily(app: Application) -> None:
             log.info("Daily message %s is off", name)
             continue
         # Attaching the timezone makes JobQueue fire at 08:00 Paris time, summer and winter.
-        app.job_queue.run_daily(DAILY_SENDERS[name], time=at.replace(tzinfo=tz), name=name)
+        app.job_queue.run_daily(DAILY_SENDERS[name], time=at.replace(tzinfo=tz), days=SEND_DAYS[name], name=name)
         log.info("Daily message %s scheduled at %s (%s)", name, f"{at:%H:%M}", tz)
 
 

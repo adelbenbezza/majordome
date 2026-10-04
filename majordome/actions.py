@@ -27,6 +27,7 @@ from .brain import (
     UpdateSetting,
 )
 from .db import Database, Routine, Task
+from .streaks import streak_text
 
 MAX_LIST_DAYS = 31  # longest period listed at once
 
@@ -97,6 +98,15 @@ TEXT = {
         "s_reminders": "Rappels : {value}",
         "s_quiet": "Heures calmes : {value}",
         "s_model": "Modèle d'IA : {model} (réglé dans Railway)",
+        "s_review": "Bilan de la semaine : {value}",
+        "s_sundays_at": "le dimanche à {time}",
+        "s_calendar": "Agenda : {value}",
+        "s_connected": "connecté",
+        "s_not_connected": "non connecté (/calendar pour le relier)",
+        "review_set": "🗓️ C'est noté : ton bilan arrivera le dimanche à {time}.",
+        "review_off": "🔕 C'est noté : plus de bilan de la semaine. Dis-moi quand tu veux le réactiver.",
+        "all_day": "toute la journée",
+        "calendar_failed": "📅 (je n'ai pas pu lire ton agenda aujourd'hui)",
         "s_off": "désactivé",
         "s_minutes_before": "{minutes} min avant",
         "s_quiet_hours": "de {start} à {end}",
@@ -177,6 +187,15 @@ TEXT = {
         "s_reminders": "Reminders: {value}",
         "s_quiet": "Quiet hours: {value}",
         "s_model": "AI model: {model} (set in Railway)",
+        "s_review": "Weekly review: {value}",
+        "s_sundays_at": "Sundays at {time}",
+        "s_calendar": "Calendar: {value}",
+        "s_connected": "connected",
+        "s_not_connected": "not connected (/calendar to link it)",
+        "review_set": "🗓️ Got it: your weekly review will arrive on Sundays at {time}.",
+        "review_off": "🔕 Got it: no more weekly review. Tell me when you want it back.",
+        "all_day": "all day",
+        "calendar_failed": "📅 (I couldn't read your calendar today)",
         "s_off": "off",
         "s_minutes_before": "{minutes} min before",
         "s_quiet_hours": "from {start} to {end}",
@@ -307,7 +326,11 @@ def execute(action: Action, db: Database, now: datetime) -> str:
 
     if isinstance(action, CompleteTasks):
         done = [task.title for task in (db.complete_task(i) for i in action.task_ids) if task]
-        done += [r.title for r in (db.check_routine(i, now.date()) for i in action.routine_ids) if r]
+        done += [
+            r.title + streak_text(db, r, now.date(), lang)
+            for r in (db.check_routine(i, now.date()) for i in action.routine_ids)
+            if r
+        ]
         if not done:
             return t["not_found"]
         return "\n".join([t["done"], *(f"• {title}" for title in done)])
@@ -329,7 +352,7 @@ def execute(action: Action, db: Database, now: datetime) -> str:
         return "\n".join([t["routine_removed"], *(f"• {r.title}" for r in removed)])
 
     if isinstance(action, Show):
-        return format_show(db, action.what, action.name, lang)
+        return format_show(db, action.what, action.name, lang, now)
 
     if isinstance(action, AddSomeday):
         added = [db.add_someday(item.title, item.category) for item in action.items]
@@ -419,13 +442,27 @@ def format_tasks(db: Database, now: datetime, start: date, end: date, lang: str)
     return "\n\n".join(sections)
 
 
-def format_brief(db: Database, now: datetime, lang: str) -> str:
-    """The morning brief: everything waiting for today, routines and overdue tasks included."""
+def format_event(event, lang: str) -> str:
+    """A calendar event line: "📅 10:00–11:00 Dentist" or "📅 Mum's birthday (all day)"."""
+    if event.start is None:
+        return f"📅 {event.title} ({TEXT[lang]['all_day']})"
+    hours = f"{event.start:%H:%M}" + (f"–{event.end:%H:%M}" if event.end and event.end != event.start else "")
+    return f"📅 {hours} {event.title}"
+
+
+def format_brief(db: Database, now: datetime, lang: str, events: list | None = None, calendar_failed: bool = False) -> str:
+    """The morning brief: today's calendar events, then everything waiting for today
+    (routines and overdue tasks included)."""
     t = TEXT[lang]
     items = day_items(db, now.date(), now, lang)
-    if not items:
-        return t["brief_empty"]
-    return "\n".join([t["brief_hello"], *(f"• {item.text}" for item in items)])
+    events = events or []
+    lines = [format_event(event, lang) for event in events]
+    if calendar_failed:
+        lines.append(t["calendar_failed"])
+    lines += [f"• {item.text}" for item in items]
+    if not items and not events:
+        return "\n".join([t["brief_empty"], *lines])
+    return "\n".join([t["brief_hello"], *lines])
 
 
 def move_task(db: Database, task: Task, day: date, now: datetime, at: time | None = None) -> Task:
@@ -455,14 +492,15 @@ def format_checkin(db: Database, now: datetime, lang: str) -> str:
     return "\n".join([t["checkin_hello"], *(f"• {item.text}" for item in items)])
 
 
-def format_show(db: Database, what: str, name: str | None, lang: str) -> str:
+def format_show(db: Database, what: str, name: str | None, lang: str, now: datetime) -> str:
     """Routines, the Someday list (optionally one category), or lists (one, or an overview)."""
     t = TEXT[lang]
     if what == "routines":
         routines = db.active_routines()
         if not routines:
             return t["no_routines"]
-        return "\n".join([t["routines"], *(f"• {format_routine(r, lang)}" for r in routines)])
+        lines = [f"• {format_routine(r, lang)}{streak_text(db, r, now.date(), lang, minimum=1)}" for r in routines]
+        return "\n".join([t["routines"], *lines])
 
     if what == "someday":
         items = [i for i in db.open_someday() if name is None or i.category.lower() == name.lower()]
@@ -496,7 +534,7 @@ def format_show(db: Database, what: str, name: str | None, lang: str) -> str:
 def apply_setting(db: Database, setting: str, value, lang: str) -> str:
     """Save one setting (already checked by brain.py) and confirm it."""
     t = TEXT[lang]
-    if setting in ("brief_time", "checkin_time"):
+    if setting in ("brief_time", "checkin_time", "review_time"):
         name = setting.removesuffix("_time")
         db.set_daily_time(name, value)
         return t[f"{name}_off"] if value is None else t[f"{name}_set"].format(time=f"{value:%H:%M}")
@@ -523,6 +561,11 @@ def format_settings(db: Database, tz_name: str, model: str, lang: str) -> str:
 
     minutes = db.get_reminder_minutes()
     quiet = db.get_quiet_hours()
+    reminders = t["s_minutes_before"].format(minutes=minutes) if minutes else t["s_off"]
+    quiet_text = t["s_quiet_hours"].format(start=f"{quiet[0]:%H:%M}", end=f"{quiet[1]:%H:%M}") if quiet else t["s_off"]
+    calendar = t["s_connected"] if db.get_calendar_url() else t["s_not_connected"]
+    review_time = db.get_daily_time("review")
+    review = t["s_sundays_at"].format(time=f"{review_time:%H:%M}") if review_time else t["s_off"]
     lines = [
         t["settings"],
         "",
@@ -530,8 +573,10 @@ def format_settings(db: Database, tz_name: str, model: str, lang: str) -> str:
         f"• {t['s_timezone'].format(tz=tz_name)}",
         f"• {t['s_brief'].format(value=daily('brief'))}",
         f"• {t['s_checkin'].format(value=daily('checkin'))}",
-        f"• {t['s_reminders'].format(value=t['s_minutes_before'].format(minutes=minutes) if minutes else t['s_off'])}",
-        f"• {t['s_quiet'].format(value=t['s_quiet_hours'].format(start=f'{quiet[0]:%H:%M}', end=f'{quiet[1]:%H:%M}') if quiet else t['s_off'])}",
+        f"• {t['s_review'].format(value=review)}",
+        f"• {t['s_reminders'].format(value=reminders)}",
+        f"• {t['s_quiet'].format(value=quiet_text)}",
+        f"• {t['s_calendar'].format(value=calendar)}",
         f"• {t['s_model'].format(model=model)}",
         "",
         t["settings_help"],
